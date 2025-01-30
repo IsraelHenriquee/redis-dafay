@@ -115,6 +115,49 @@ WEBHOOK_URL=https://seu-webhook.com/endpoint
 3. Redis -> Monitor (avisa quando expira)
 4. Monitor -> Webhook (envia mensagem expirada)
 
+## Dockerfiles para Copiar
+
+### redis-datafy (Redis)
+```dockerfile
+FROM redis:7.2.3
+
+WORKDIR /usr/local/etc/redis
+
+COPY redis.conf .
+
+CMD ["redis-server", "redis.conf"]
+```
+
+### redis-api (API)
+```dockerfile
+FROM python:3.9
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . .
+
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "api:app"]
+```
+
+### redis-monitor (Monitor)
+```dockerfile
+FROM python:3.9
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . .
+
+CMD ["python3", "monitor.py"]
+```
+
+Se estiver usando o campo "Dockerfile" no EasyPanel, basta copiar e colar o conteúdo correspondente ao serviço que está configurando.
+
 ## Uso no EasyPanel
 
 1. Criar nova aplicação Python
