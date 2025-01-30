@@ -106,6 +106,13 @@ def monitor():
 if __name__ == "__main__":
     load_dotenv()
     
+    # Debug das variáveis
+    print("=== Variáveis de Ambiente ===")
+    print(f"REDIS_HOST: {os.getenv('REDIS_HOST')}")
+    print(f"REDIS_PORT: {os.getenv('REDIS_PORT')}")
+    print(f"WEBHOOK_URL: {os.getenv('WEBHOOK_URL')}")
+    print("==========================")
+    
     if not os.getenv('WEBHOOK_URL'):
         print("ERRO: WEBHOOK_URL não configurada!")
         exit(1)
