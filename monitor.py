@@ -36,22 +36,50 @@ def acquire_lock(lock_key, expire_seconds=10):
 async def send_webhook(payload):
     """Envia dados para o webhook de forma assíncrona"""
     try:
-        print(f"Tentando enviar webhook para: {WEBHOOK_URL}", flush=True)
+        print(f"\n=== ENVIANDO WEBHOOK ===", flush=True)
+        print(f"URL: {WEBHOOK_URL}", flush=True)
         print(f"Payload: {json.dumps(payload, indent=2)}", flush=True)
         
-        async with aiohttp.ClientSession() as session:
-            print("Iniciando request...", flush=True)
-            async with session.post(WEBHOOK_URL, json=payload) as response:
-                status = response.status
-                text = await response.text()
-                print(f"Resposta do webhook: Status={status}, Body={text}", flush=True)
+        timeout = aiohttp.ClientTimeout(total=30)  # 30 segundos de timeout
+        
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            print("\nIniciando request...", flush=True)
+            try:
+                async with session.post(
+                    WEBHOOK_URL, 
+                    json=payload,
+                    ssl=False,  # Desativa verificação SSL
+                    headers={
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Redis-Monitor/1.0'
+                    }
+                ) as response:
+                    status = response.status
+                    text = await response.text()
+                    print(f"\nResposta do webhook:", flush=True)
+                    print(f"Status: {status}", flush=True)
+                    print(f"Body: {text}", flush=True)
+                    
+                    if status != 200:
+                        print(f"\nERRO: Resposta não-200 do webhook", flush=True)
+                        print(f"Status: {status}", flush=True)
+                        print(f"Body: {text}", flush=True)
+                    return status == 200
+                    
+            except aiohttp.ClientConnectorError as e:
+                print(f"\nERRO: Não conseguiu conectar ao servidor", flush=True)
+                print(f"Erro: {str(e)}", flush=True)
+                return False
                 
-                if status != 200:
-                    print(f"Erro na resposta do webhook: {status} - {text}", flush=True)
-                return status == 200
+            except asyncio.TimeoutError:
+                print(f"\nERRO: Timeout ao enviar webhook", flush=True)
+                print(f"O servidor não respondeu em 30 segundos", flush=True)
+                return False
+                
     except Exception as e:
-        print(f"Erro ao enviar webhook: {str(e)}", flush=True)
-        print(f"Tipo do erro: {type(e)}", flush=True)
+        print(f"\nERRO GRAVE ao enviar webhook:", flush=True)
+        print(f"Tipo: {type(e)}", flush=True)
+        print(f"Mensagem: {str(e)}", flush=True)
         return False
 
 async def process_expired_chat(ttl_key):
