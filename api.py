@@ -17,7 +17,6 @@ load_dotenv()
 
 app = Flask(__name__)
 app.config['PREFERRED_URL_SCHEME'] = 'https'  # Para HTTPS
-app.config['SERVER_NAME'] = None  # Permite qualquer domínio
 
 # Conexão com Redis
 redis_client = redis.Redis(
@@ -27,7 +26,8 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
-@app.route('/message', methods=['POST'])
+@app.route('/message', methods=['POST'])  # Rota principal
+@app.route('/', methods=['POST'])         # Rota alternativa
 def save_message():
     """
     Endpoint para receber mensagens via POST
