@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
+app.config['PREFERRED_URL_SCHEME'] = 'https'  # Para HTTPS
+app.config['SERVER_NAME'] = None  # Permite qualquer domínio
 
 # Conexão com Redis
 redis_client = redis.Redis(
@@ -67,11 +69,11 @@ def save_message():
         ttl = payload.get("ttl", 15)
         
         # Chaves no Redis
-        ttl_key = f"ttl:chat:{user_id}"
-        data_key = f"data:chat:{user_id}"
+        ttl_key = f"chat:TTL:{user_id}"
+        data_key = f"chat:DATA:{user_id}"
         
         # Pega dados existentes ou cria novo
-        current_data = redis_client.hget(data_key, "data")
+        current_data = redis_client.get(data_key)
         if current_data:
             data = json.loads(current_data)
             # Adiciona nova mensagem à lista existente
@@ -88,11 +90,11 @@ def save_message():
                 "messages": [payload["message"]]
             }
         
-        # Salva dados atualizados
-        redis_client.hset(data_key, "data", json.dumps(data))
+        # Salva dados atualizados como string JSON
+        redis_client.set(data_key, json.dumps(data))
         
         # Atualiza TTL
-        redis_client.set(ttl_key, data_key, ex=ttl)
+        redis_client.set(ttl_key, "", ex=ttl)
         
         return jsonify({
             "success": True,
