@@ -115,11 +115,11 @@ async def process_expired_chat(ttl_key):
         # Converte de JSON
         chat_data = json.loads(chat_data)
         
-        # Prepara o payload
+        # Monta o payload
         payload = {
             **chat_data["metadata"],  # Expanda todos os campos de metadados
             "user_id": chat_data["metadata"]["user"],  # Adiciona user_id igual ao user
-            "messages": chat_data["messages"],  # Lista simples com as mensagens
+            "listamessages": chat_data["messages"],  # Alterado aqui
             "processed_at": datetime.now().isoformat()
         }
         
