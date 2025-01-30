@@ -18,13 +18,13 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
-@app.route('/api/message', methods=['POST'])
+@app.route('/message', methods=['POST'])
 def save_message():
     """
     Endpoint para receber mensagens via POST
     
     Exemplo de curl:
-    curl -X POST http://seu-ip:5000/api/message \
+    curl -X POST http://seu-ip:5000/message \
         -H "Content-Type: application/json" \
         -d '{
             "id_agente": 1,

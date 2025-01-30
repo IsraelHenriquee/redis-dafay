@@ -271,6 +271,25 @@ Enviar uma nova mensagem:
 - `message`: Campo obrigatório, texto da mensagem
 - `ttl`: Opcional, tempo em segundos até expirar (default: 15)
 
+## Endpoints
+
+> ⚠️ **IMPORTANTE**: Estes endpoints são fixos e não devem ser alterados!
+
+1. **Entrada de Mensagens (API)**
+```
+URL: /message
+Método: POST
+Porta: 5000
+Exemplo: http://seu-dominio:5000/message
+```
+
+2. **Saída de Mensagens (Monitor)**
+```
+URL: Configurado via variável WEBHOOK_URL
+Método: POST
+Quando: Ao expirar mensagem no Redis
+```
+
 ## Webhook
 
 Quando o chat expira, todas as mensagens são enviadas para o webhook configurado com o seguinte formato:
@@ -288,3 +307,5 @@ Quando o chat expira, todas as mensagens são enviadas para o webhook configurad
     ],
     "processed_at": "2025-01-30T01:19:45"
 }
+
+```
