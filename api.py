@@ -4,6 +4,13 @@ import json
 from datetime import datetime
 import os
 from dotenv import load_dotenv
+from constants import (
+    get_ttl_key,
+    get_data_key,
+    DEFAULT_DATA_STRUCTURE,
+    REQUIRED_FIELDS,
+    DEFAULT_TTL
+)
 
 # Carrega variáveis do .env
 load_dotenv()
@@ -57,20 +64,19 @@ def save_message():
         if not payload:
             return jsonify({"error": "Payload vazio"}), 400
             
-        required_fields = ["user", "message"]
-        for field in required_fields:
+        for field in REQUIRED_FIELDS:
             if field not in payload:
                 return jsonify({"error": f"Campo obrigatório ausente: {field}"}), 400
         
         # Usa o campo user como identificador único do chat
         user_id = payload["user"]
         
-        # Pega o TTL do payload ou usa 15 segundos como default
-        ttl = payload.get("ttl", 15)
+        # Pega o TTL do payload ou usa default
+        ttl = payload.get("ttl", DEFAULT_TTL)
         
-        # Chaves no Redis
-        ttl_key = f"chat:TTL:{user_id}"
-        data_key = f"chat:DATA:{user_id}"
+        # Chaves no Redis usando funções auxiliares
+        ttl_key = get_ttl_key(user_id)
+        data_key = get_data_key(user_id)
         
         # Pega dados existentes ou cria novo
         current_data = redis_client.get(data_key)
@@ -85,16 +91,15 @@ def save_message():
             if "ttl" in metadata:  # Remove TTL dos metadados
                 del metadata["ttl"]
             
-            data = {
-                "metadata": metadata,
-                "messages": [payload["message"]]
-            }
+            data = DEFAULT_DATA_STRUCTURE.copy()
+            data["metadata"] = metadata
+            data["messages"] = [payload["message"]]
         
         # Salva dados atualizados como string JSON
         redis_client.set(data_key, json.dumps(data))
         
         # Atualiza TTL
-        redis_client.set(ttl_key, "", ex=ttl)
+        redis_client.set(ttl_key, "", ex=ttl)  # Chave TTL vazia, só para expiração
         
         return jsonify({
             "success": True,
@@ -103,13 +108,13 @@ def save_message():
         
     except Exception as e:
         return jsonify({
-            "error": f"Erro ao processar mensagem: {str(e)}"
+            "error": f"Erro ao salvar mensagem: {str(e)}"
         }), 500
 
 if __name__ == "__main__":
     try:
         redis_client.ping()
         print("Conectado ao Redis com sucesso!")
-        app.run(host='0.0.0.0', port=5000)
+        app.run(debug=True, host='0.0.0.0', port=5000)
     except redis.ConnectionError:
         print("Erro ao conectar ao Redis. Verifique se o servidor está rodando.")

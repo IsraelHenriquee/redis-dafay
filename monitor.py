@@ -7,6 +7,11 @@ import sys
 import asyncio
 import aiohttp
 from dotenv import load_dotenv
+from constants import (
+    REDIS_PREFIX_TTL,
+    get_data_key,
+    get_user_id_from_ttl_key
+)
 
 # Força flush imediato dos prints
 sys.stdout.reconfigure(line_buffering=True)
@@ -94,12 +99,12 @@ async def process_expired_chat(ttl_key):
     Quando um chat expira, envia todas as mensagens para o webhook
     """
     try:
-        # Extrai o user_id da chave TTL (formato: chat:TTL:{user_id})
-        user_id = ttl_key.split(':')[-1]
+        # Extrai o user_id da chave TTL usando função auxiliar
+        user_id = get_user_id_from_ttl_key(ttl_key)
         print(f"\nProcessando chat expirado do usuário: {user_id}", flush=True)
         
-        # Chave dos dados
-        data_key = f"chat:DATA:{user_id}"
+        # Chave dos dados usando função auxiliar
+        data_key = get_data_key(user_id)
         
         # Pega os dados do Redis
         chat_data = redis_client.get(data_key)
@@ -161,7 +166,7 @@ async def monitor():
                 
                 print(f"Chave expirada: {expired_key}", flush=True)
                     
-                if expired_key.startswith('chat:TTL:'):
+                if expired_key.startswith(f"{REDIS_PREFIX_TTL}:"):  # Usa constante
                     print(f"✨ Processando chave: {expired_key}", flush=True)
                     await process_expired_chat(expired_key)
                 else:
