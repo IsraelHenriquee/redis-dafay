@@ -139,15 +139,28 @@ def monitor():
     print("\nMonitorando chats que expiram...", flush=True)
     print(f"Webhook configurado para: {WEBHOOK_URL}", flush=True)
     
+    # Debug: Lista todas as chaves no Redis
+    print("\nChaves no Redis:", flush=True)
+    for key in redis_client.keys('*'):
+        ttl = redis_client.ttl(key)
+        print(f"- {key} (TTL: {ttl}s)", flush=True)
+    
     for message in pubsub.listen():
+        print(f"\nRecebeu mensagem do Redis: {message}", flush=True)
+        
         if message['type'] == 'pmessage':
             # Verifica se data já é string ou precisa decode
             expired_key = message['data']
             if isinstance(expired_key, bytes):
                 expired_key = expired_key.decode('utf-8')
+            
+            print(f"Chave expirada: {expired_key}", flush=True)
                 
             if expired_key.startswith('chat:TTL:'):
+                print(f"✨ Processando chave: {expired_key}", flush=True)
                 process_expired_chat(expired_key)
+            else:
+                print(f"❌ Chave não é do chat: {expired_key}", flush=True)
 
 if __name__ == "__main__":
     load_dotenv()
