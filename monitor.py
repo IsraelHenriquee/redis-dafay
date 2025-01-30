@@ -141,9 +141,12 @@ def monitor():
     
     for message in pubsub.listen():
         if message['type'] == 'pmessage':
-            expired_key = message['data'].decode('utf-8')
+            # Verifica se data já é string ou precisa decode
+            expired_key = message['data']
+            if isinstance(expired_key, bytes):
+                expired_key = expired_key.decode('utf-8')
+                
             if expired_key.startswith('chat:TTL:'):
-                # Processa em thread separada para não bloquear
                 process_expired_chat(expired_key)
 
 if __name__ == "__main__":
