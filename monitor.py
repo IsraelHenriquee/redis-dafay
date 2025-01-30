@@ -104,13 +104,17 @@ def monitor():
         pubsub.close()
 
 if __name__ == "__main__":
+    load_dotenv()
+    
+    if not os.getenv('WEBHOOK_URL'):
+        print("ERRO: WEBHOOK_URL não configurada!")
+        exit(1)
+    
     try:
-        if not WEBHOOK_URL:
-            print("ERRO: WEBHOOK_URL não configurada no .env")
-            exit(1)
-            
         redis_client.ping()
         print("Conectado ao Redis com sucesso!")
+        print(f"Usando webhook: {os.getenv('WEBHOOK_URL')}")
         monitor()
     except redis.ConnectionError:
         print("Erro ao conectar ao Redis. Verifique se o servidor está rodando.")
+        exit(1)
