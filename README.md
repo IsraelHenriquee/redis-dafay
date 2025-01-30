@@ -12,8 +12,12 @@ O sistema é composto por 3 serviços que devem ser configurados na seguinte ord
 
 **Dockerfile**:
 ```dockerfile
+FROM alpine/git as clone
+WORKDIR /app
+RUN git clone https://github.com/IsraelHenriquee/redis-datafy.git .
+
 FROM redis:7.2.3
-COPY redis.conf /usr/local/etc/redis/
+COPY --from=clone /app/redis.conf /usr/local/etc/redis/
 CMD ["redis-server", "/usr/local/etc/redis/redis.conf"]
 ```
 
@@ -25,11 +29,15 @@ CMD ["redis-server", "/usr/local/etc/redis/redis.conf"]
 
 **Dockerfile**:
 ```dockerfile
+FROM alpine/git as clone
+WORKDIR /app
+RUN git clone https://github.com/IsraelHenriquee/redis-datafy.git .
+
 FROM python:3.9
 WORKDIR /app
-COPY requirements.txt .
+COPY --from=clone /app/requirements.txt .
 RUN pip install -r requirements.txt
-COPY . .
+COPY --from=clone /app .
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "api:app"]
 ```
 
@@ -48,11 +56,15 @@ REDIS_PASSWORD=sua_senha_aqui
 
 **Dockerfile**:
 ```dockerfile
+FROM alpine/git as clone
+WORKDIR /app
+RUN git clone https://github.com/IsraelHenriquee/redis-datafy.git .
+
 FROM python:3.9
 WORKDIR /app
-COPY requirements.txt .
+COPY --from=clone /app/requirements.txt .
 RUN pip install -r requirements.txt
-COPY . .
+COPY --from=clone /app .
 CMD ["python3", "monitor.py"]
 ```
 
