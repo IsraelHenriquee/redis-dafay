@@ -6,8 +6,12 @@ import time
 import os
 from dotenv import load_dotenv
 
+print("=== INICIANDO MONITOR ===")
+print("Python está rodando!")
+
 # Carrega variáveis do .env
 load_dotenv()
+print("Carregou dotenv!")
 
 # Conexão com Redis
 redis_client = redis.Redis(
