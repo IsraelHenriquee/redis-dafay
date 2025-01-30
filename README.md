@@ -33,6 +33,34 @@ REDIS_PASSWORD=sua_senha_aqui
 WEBHOOK_URL=https://seu-dominio.com/webhook/process
 ```
 
+## Configuração no EasyPanel
+
+O sistema é composto por 3 serviços que precisam ser configurados no EasyPanel:
+
+### 1. redis-datafy (Redis)
+- Não precisa de variáveis de ambiente
+- Usa as configurações do arquivo `redis.conf`
+
+### 2. redis-api (API)
+```env
+REDIS_HOST=redis-datafy
+REDIS_PORT=6379
+REDIS_PASSWORD=sua_senha_aqui
+```
+
+### 3. redis-monitor (Monitor)
+```env
+REDIS_HOST=redis-datafy
+REDIS_PORT=6379
+REDIS_PASSWORD=sua_senha_aqui
+WEBHOOK_URL=https://seu-webhook.com/endpoint
+```
+
+**Importante:**
+- Use exatamente o mesmo `REDIS_PASSWORD` em todos os serviços
+- O `REDIS_HOST` deve ser o nome do serviço Redis no EasyPanel
+- O `WEBHOOK_URL` só é necessário no serviço monitor
+
 ## Uso no EasyPanel
 
 1. Criar nova aplicação Python
