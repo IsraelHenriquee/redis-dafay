@@ -35,112 +35,65 @@ WEBHOOK_URL=https://seu-dominio.com/webhook/process
 
 ## Configuração no EasyPanel
 
-O sistema é composto por 3 serviços. Para cada um, use a opção "Dockerfile" e cole o Dockerfile correspondente:
+O sistema é composto por 3 serviços. Configure na seguinte ordem:
 
 ### 1. redis-datafy (Redis)
-**Cole no campo Dockerfile:**
-```dockerfile
-FROM alpine/git as clone
-WORKDIR /app
-RUN git clone https://github.com/IsraelHenriquee/redis-datafy.git .
-
-FROM redis:7.2.3
-COPY --from=clone /app/redis.conf /usr/local/etc/redis/
-CMD ["redis-server", "/usr/local/etc/redis/redis.conf"]
-```
-
-**Variáveis de Ambiente:**
-- Não precisa de variáveis de ambiente
-- Usa as configurações do arquivo `redis.conf`
-
-**Portas:**
-- Não precisa expor portas
-- Comunicação apenas interna
+- **Source**: GitHub
+- **Repository**: IsraelHenriquee/redis-datafy
+- **Branch**: main
+- **Dockerfile**: `Dockerfile.redis`
 
 ### 2. redis-api (API)
-**Cole no campo Dockerfile:**
-```dockerfile
-FROM alpine/git as clone
-WORKDIR /app
-RUN git clone https://github.com/IsraelHenriquee/redis-datafy.git .
+- **Source**: GitHub
+- **Repository**: IsraelHenriquee/redis-datafy
+- **Branch**: main
+- **Dockerfile**: `Dockerfile`
 
-FROM python:3.9
-WORKDIR /app
-COPY --from=clone /app/requirements.txt .
-RUN pip install -r requirements.txt
-COPY --from=clone /app .
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "api:app"]
+**Variáveis de Ambiente**:
 ```
-
-**Variáveis de Ambiente:**
-```env
 REDIS_HOST=redis-datafy
 REDIS_PORT=6379
 REDIS_PASSWORD=sua_senha_aqui
 ```
 
-**Portas:**
-- Porta: 5000
-- Tipo: HTTP
-- Necessário para receber mensagens via API
+**Porta**: 5000 (HTTP)
 
 ### 3. redis-monitor (Monitor)
-**Cole no campo Dockerfile:**
-```dockerfile
-FROM alpine/git as clone
-WORKDIR /app
-RUN git clone https://github.com/IsraelHenriquee/redis-datafy.git .
+- **Source**: GitHub
+- **Repository**: IsraelHenriquee/redis-datafy
+- **Branch**: main
+- **Dockerfile**: `Dockerfile.monitor`
 
-FROM python:3.9
-WORKDIR /app
-COPY --from=clone /app/requirements.txt .
-RUN pip install -r requirements.txt
-COPY --from=clone /app .
-CMD ["python3", "monitor.py"]
+**Variáveis de Ambiente**:
 ```
-
-**Variáveis de Ambiente:**
-```env
 REDIS_HOST=redis-datafy
 REDIS_PORT=6379
 REDIS_PASSWORD=sua_senha_aqui
-WEBHOOK_URL=https://seu-webhook.com/endpoint
+WEBHOOK_URL=https://painel.israelhenrique.com.br/webhook/process
 ```
 
-**Portas:**
-- Não precisa expor portas
-- Apenas faz conexão de saída para o webhook
+### Importante
+- Use a mesma senha do Redis em todos os serviços
+- O nome do serviço Redis deve ser exatamente `redis-datafy`
+- Configure na ordem: redis -> api -> monitor
+- Depois de configurar, clique em Deploy em cada serviço
 
-**Importante:**
-- Use exatamente o mesmo `REDIS_PASSWORD` em todos os serviços
-- O `REDIS_HOST` deve ser o nome do serviço Redis no EasyPanel
-- O `WEBHOOK_URL` só é necessário no serviço monitor
+### Endpoints
+> ⚠️ **IMPORTANTE**: Estes endpoints são fixos e não devem ser alterados!
 
-### Papel de Cada Serviço
+1. **Entrada de Mensagens (API)**
+```
+URL: /message
+Método: POST
+Porta: 5000
+```
 
-1. **redis-api** (API):
-- Recebe mensagens via POST
-- Salva no Redis com TTL
-- Atualiza TTL se receber nova mensagem
-- Roda com Gunicorn para alta performance
-
-2. **redis-datafy** (Redis):
-- Armazena as mensagens
-- Controla o TTL (tempo de vida)
-- Notifica quando mensagem expira
-- Protegido com senha
-
-3. **redis-monitor** (Monitor):
-- Escuta eventos de expiração do Redis
-- Envia mensagens expiradas para webhook
-- Processa de forma assíncrona
-- Aguenta várias mensagens simultâneas
-
-### Fluxo de Funcionamento
-1. Cliente -> API (envia mensagem)
-2. API -> Redis (salva com TTL)
-3. Redis -> Monitor (avisa quando expira)
-4. Monitor -> Webhook (envia mensagem expirada)
+2. **Saída de Mensagens (Monitor)**
+```
+URL: Configurado via WEBHOOK_URL
+Método: POST
+Quando: Ao expirar mensagem no Redis
+```
 
 ## Configuração Rápida (Docker Compose)
 
