@@ -1,10 +1,11 @@
 import redis
-import requests
 import json
 from datetime import datetime
 import time
 import os
 import sys
+import asyncio
+import aiohttp
 from dotenv import load_dotenv
 
 # Força flush imediato dos prints
@@ -32,7 +33,21 @@ def acquire_lock(lock_key, expire_seconds=10):
     """Tenta adquirir um lock"""
     return redis_client.set(lock_key, '1', ex=expire_seconds, nx=True)
 
-def process_expired_chat(ttl_key):
+async def send_webhook(payload):
+    """Envia dados para o webhook de forma assíncrona"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(WEBHOOK_URL, json=payload) as response:
+                status = response.status
+                if status != 200:
+                    text = await response.text()
+                    print(f"Erro na resposta do webhook: {status} - {text}", flush=True)
+                return status == 200
+    except Exception as e:
+        print(f"Erro ao enviar webhook: {str(e)}", flush=True)
+        return False
+
+async def process_expired_chat(ttl_key):
     """
     Quando um chat expira, envia todas as mensagens para o webhook
     """
@@ -43,7 +58,6 @@ def process_expired_chat(ttl_key):
             
         # Pega o ID do usuário do ttl_key (formato: ttl:chat:user123)
         user_id = ttl_key.split(':')[2]
-        
         # Tenta adquirir lock para este usuário
         lock_key = f"lock:chat:{user_id}"
         if not acquire_lock(lock_key):
@@ -57,7 +71,6 @@ def process_expired_chat(ttl_key):
         
         # Pega os dados do hash
         data = redis_client.hget(data_key, "data")
-        
         if not data:
             print(f"Dados não encontrados para {data_key}", flush=True)
             return
@@ -75,25 +88,20 @@ def process_expired_chat(ttl_key):
         
         print(f"Enviando payload para webhook: {json.dumps(payload, indent=2)}", flush=True)
         
-        # Envia para o webhook
-        response = requests.post(WEBHOOK_URL, json=payload)
-        print(f"Resposta do webhook: {response.status_code}", flush=True)
+        # Envia para o webhook de forma assíncrona
+        asyncio.create_task(send_webhook(payload))
         
-        if response.status_code != 200:
-            print(f"Erro na resposta: {response.text}", flush=True)
-            
-        # Após enviar com sucesso, remove os dados
+        # Remove os dados imediatamente
         redis_client.delete(data_key)
         
     except Exception as e:
         print(f"Erro ao processar chat expirado: {str(e)}", flush=True)
 
-def monitor():
+async def monitor():
     """
     Monitora chaves que expiram no Redis
     """
     pubsub = redis_client.pubsub()
-    
     # Inscreve no canal de eventos de expiração
     pubsub.psubscribe('__keyevent@0__:expired')
     
@@ -105,7 +113,8 @@ def monitor():
             if message['type'] == 'pmessage':
                 key = message['data']
                 if key.startswith('ttl:chat:'):
-                    process_expired_chat(key)
+                    # Processa de forma assíncrona
+                    await process_expired_chat(key)
     except KeyboardInterrupt:
         print("\nMonitoramento interrompido", flush=True)
     finally:
@@ -129,7 +138,9 @@ if __name__ == "__main__":
         redis_client.ping()
         print("Conectado ao Redis com sucesso!", flush=True)
         print(f"Usando webhook: {os.getenv('WEBHOOK_URL')}", flush=True)
-        monitor()
+        
+        # Roda o monitor de forma assíncrona
+        asyncio.run(monitor())
     except redis.ConnectionError:
         print("Erro ao conectar ao Redis. Verifique se o servidor está rodando.", flush=True)
         exit(1)
