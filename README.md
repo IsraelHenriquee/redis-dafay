@@ -38,10 +38,20 @@ WEBHOOK_URL=https://seu-dominio.com/webhook/process
 O sistema é composto por 3 serviços que precisam ser configurados no EasyPanel:
 
 ### 1. redis-datafy (Redis)
+**Configuração Source:**
+- Repository: `IsraelHenriquee/redis-datafy`
+- Dockerfile: `Dockerfile.redis`
+
+**Variáveis de Ambiente:**
 - Não precisa de variáveis de ambiente
 - Usa as configurações do arquivo `redis.conf`
 
 ### 2. redis-api (API)
+**Configuração Source:**
+- Repository: `IsraelHenriquee/redis-datafy`
+- Dockerfile: `Dockerfile`
+
+**Variáveis de Ambiente:**
 ```env
 REDIS_HOST=redis-datafy
 REDIS_PORT=6379
@@ -49,6 +59,11 @@ REDIS_PASSWORD=sua_senha_aqui
 ```
 
 ### 3. redis-monitor (Monitor)
+**Configuração Source:**
+- Repository: `IsraelHenriquee/redis-datafy`
+- Dockerfile: `Dockerfile.monitor`
+
+**Variáveis de Ambiente:**
 ```env
 REDIS_HOST=redis-datafy
 REDIS_PORT=6379
@@ -60,6 +75,32 @@ WEBHOOK_URL=https://seu-webhook.com/endpoint
 - Use exatamente o mesmo `REDIS_PASSWORD` em todos os serviços
 - O `REDIS_HOST` deve ser o nome do serviço Redis no EasyPanel
 - O `WEBHOOK_URL` só é necessário no serviço monitor
+
+### Papel de Cada Serviço
+
+1. **redis-api** (API):
+- Recebe mensagens via POST
+- Salva no Redis com TTL
+- Atualiza TTL se receber nova mensagem
+- Roda com Gunicorn para alta performance
+
+2. **redis-datafy** (Redis):
+- Armazena as mensagens
+- Controla o TTL (tempo de vida)
+- Notifica quando mensagem expira
+- Protegido com senha
+
+3. **redis-monitor** (Monitor):
+- Escuta eventos de expiração do Redis
+- Envia mensagens expiradas para webhook
+- Processa de forma assíncrona
+- Aguenta várias mensagens simultâneas
+
+### Fluxo de Funcionamento
+1. Cliente -> API (envia mensagem)
+2. API -> Redis (salva com TTL)
+3. Redis -> Monitor (avisa quando expira)
+4. Monitor -> Webhook (envia mensagem expirada)
 
 ## Uso no EasyPanel
 
