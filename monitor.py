@@ -4,7 +4,8 @@ from datetime import datetime
 import time
 import os
 import sys
-import requests  # Trocando aiohttp por requests
+import asyncio
+import aiohttp
 from dotenv import load_dotenv
 
 # Força flush imediato dos prints
@@ -32,8 +33,8 @@ def acquire_lock(lock_key, expire_seconds=10):
     """Tenta adquirir um lock"""
     return redis_client.set(lock_key, '1', ex=expire_seconds, nx=True)
 
-def send_webhook(payload):
-    """Envia dados para o webhook de forma síncrona"""
+async def send_webhook(payload):
+    """Envia dados para o webhook de forma assíncrona"""
     # Remove barra final se existir
     webhook_url = WEBHOOK_URL.rstrip('/')
     
@@ -42,39 +43,42 @@ def send_webhook(payload):
         print(f"URL: {webhook_url}", flush=True)
         print(f"Payload: {json.dumps(payload, indent=2)}", flush=True)
         
-        print("\nIniciando request...", flush=True)
+        timeout = aiohttp.ClientTimeout(total=30)
         
-        # Usa requests ao invés de aiohttp
-        response = requests.post(
-            webhook_url,
-            json=payload,
-            verify=False,
-            headers={
-                'Content-Type': 'application/json',
-                'User-Agent': 'Redis-Monitor/1.0'
-            },
-            timeout=30
-        )
-        
-        print(f"\nResposta do webhook:", flush=True)
-        print(f"Status: {response.status_code}", flush=True)
-        print(f"Body: {response.text}", flush=True)
-        
-        if response.status_code == 200:
-            print("\n✅ Webhook enviado com sucesso!", flush=True)
-        else:
-            print(f"\n❌ Erro na resposta do webhook:", flush=True)
-            print(f"Status: {response.status_code}", flush=True)
-            print(f"Body: {response.text}", flush=True)
-        
-        return response.status_code == 200
-        
-    except requests.exceptions.ConnectionError as e:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            print("\nIniciando request...", flush=True)
+            
+            async with session.post(
+                webhook_url,
+                json=payload,
+                ssl=False,
+                headers={
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Redis-Monitor/1.0'
+                }
+            ) as response:
+                status = response.status
+                text = await response.text()
+                
+                print(f"\nResposta do webhook:", flush=True)
+                print(f"Status: {status}", flush=True)
+                print(f"Body: {text}", flush=True)
+                
+                if status == 200:
+                    print("\n✅ Webhook enviado com sucesso!", flush=True)
+                else:
+                    print(f"\n❌ Erro na resposta do webhook:", flush=True)
+                    print(f"Status: {status}", flush=True)
+                    print(f"Body: {text}", flush=True)
+                
+                return status == 200
+                
+    except aiohttp.ClientConnectorError as e:
         print(f"\n❌ Não conseguiu conectar ao servidor:", flush=True)
         print(f"Erro: {str(e)}", flush=True)
         return False
         
-    except requests.exceptions.Timeout:
+    except asyncio.TimeoutError:
         print(f"\n❌ Timeout ao enviar webhook", flush=True)
         print(f"O servidor não respondeu em 30 segundos", flush=True)
         return False
@@ -85,7 +89,7 @@ def send_webhook(payload):
         print(f"Mensagem: {str(e)}", flush=True)
         return False
 
-def process_expired_chat(ttl_key):
+async def process_expired_chat(ttl_key):
     """
     Quando um chat expira, envia todas as mensagens para o webhook
     """
@@ -116,8 +120,8 @@ def process_expired_chat(ttl_key):
         
         print(f"Enviando payload para webhook: {json.dumps(payload, indent=2)}", flush=True)
         
-        # Envia para o webhook
-        success = send_webhook(payload)
+        # Envia para o webhook de forma assíncrona
+        success = await send_webhook(payload)
         
         if success:
             # Remove os dados do Redis
@@ -129,7 +133,7 @@ def process_expired_chat(ttl_key):
     except Exception as e:
         print(f"Erro ao processar chat expirado: {str(e)}", flush=True)
 
-def monitor():
+async def monitor():
     """
     Monitora chaves que expiram no Redis
     """
@@ -145,22 +149,27 @@ def monitor():
         ttl = redis_client.ttl(key)
         print(f"- {key} (TTL: {ttl}s)", flush=True)
     
-    for message in pubsub.listen():
-        print(f"\nRecebeu mensagem do Redis: {message}", flush=True)
-        
-        if message['type'] == 'pmessage':
-            # Verifica se data já é string ou precisa decode
-            expired_key = message['data']
-            if isinstance(expired_key, bytes):
-                expired_key = expired_key.decode('utf-8')
+    try:
+        for message in pubsub.listen():
+            print(f"\nRecebeu mensagem do Redis: {message}", flush=True)
             
-            print(f"Chave expirada: {expired_key}", flush=True)
+            if message['type'] == 'pmessage':
+                # Verifica se data já é string ou precisa decode
+                expired_key = message['data']
+                if isinstance(expired_key, bytes):
+                    expired_key = expired_key.decode('utf-8')
                 
-            if expired_key.startswith('chat:TTL:'):
-                print(f"✨ Processando chave: {expired_key}", flush=True)
-                process_expired_chat(expired_key)
-            else:
-                print(f"❌ Chave não é do chat: {expired_key}", flush=True)
+                print(f"Chave expirada: {expired_key}", flush=True)
+                    
+                if expired_key.startswith('chat:TTL:'):
+                    print(f"✨ Processando chave: {expired_key}", flush=True)
+                    await process_expired_chat(expired_key)
+                else:
+                    print(f"❌ Chave não é do chat: {expired_key}", flush=True)
+    except Exception as e:
+        print(f"Erro no monitor: {str(e)}", flush=True)
+    finally:
+        pubsub.close()
 
 if __name__ == "__main__":
     load_dotenv()
@@ -176,6 +185,6 @@ if __name__ == "__main__":
         redis_client.ping()
         print("\nConectado ao Redis com sucesso!", flush=True)
         print(f"Usando webhook: {WEBHOOK_URL}", flush=True)
-        monitor()
+        asyncio.run(monitor())
     except redis.ConnectionError:
         print("Erro ao conectar ao Redis. Verifique se o servidor está rodando.", flush=True)
