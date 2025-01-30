@@ -9,4 +9,4 @@ COPY . .
 
 EXPOSE 5000
 
-CMD ["python3", "api.py"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "api:app"]
