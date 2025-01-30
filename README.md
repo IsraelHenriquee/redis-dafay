@@ -35,15 +35,19 @@ WEBHOOK_URL=https://seu-dominio.com/webhook/process
 
 ## Configuração no EasyPanel
 
-O sistema é composto por 3 serviços que precisam ser configurados no EasyPanel.
-Você tem duas opções de configuração:
+O sistema é composto por 3 serviços. Para cada um, use a opção "Dockerfile" e cole o Dockerfile correspondente:
 
-### Opção 1: Usando GitHub (Recomendado)
+### 1. redis-datafy (Redis)
+**Cole no campo Dockerfile:**
+```dockerfile
+FROM alpine/git as clone
+WORKDIR /app
+RUN git clone https://github.com/IsraelHenriquee/redis-datafy.git .
 
-#### 1. redis-datafy (Redis)
-**Configuração Source:**
-- Repository: `IsraelHenriquee/redis-datafy`
-- Dockerfile: `Dockerfile.redis`
+FROM redis:7.2.3
+COPY --from=clone /app/redis.conf /usr/local/etc/redis/
+CMD ["redis-server", "/usr/local/etc/redis/redis.conf"]
+```
 
 **Variáveis de Ambiente:**
 - Não precisa de variáveis de ambiente
@@ -53,10 +57,20 @@ Você tem duas opções de configuração:
 - Não precisa expor portas
 - Comunicação apenas interna
 
-#### 2. redis-api (API)
-**Configuração Source:**
-- Repository: `IsraelHenriquee/redis-datafy`
-- Dockerfile: `Dockerfile`
+### 2. redis-api (API)
+**Cole no campo Dockerfile:**
+```dockerfile
+FROM alpine/git as clone
+WORKDIR /app
+RUN git clone https://github.com/IsraelHenriquee/redis-datafy.git .
+
+FROM python:3.9
+WORKDIR /app
+COPY --from=clone /app/requirements.txt .
+RUN pip install -r requirements.txt
+COPY --from=clone /app .
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "api:app"]
+```
 
 **Variáveis de Ambiente:**
 ```env
@@ -70,10 +84,20 @@ REDIS_PASSWORD=sua_senha_aqui
 - Tipo: HTTP
 - Necessário para receber mensagens via API
 
-#### 3. redis-monitor (Monitor)
-**Configuração Source:**
-- Repository: `IsraelHenriquee/redis-datafy`
-- Dockerfile: `Dockerfile.monitor`
+### 3. redis-monitor (Monitor)
+**Cole no campo Dockerfile:**
+```dockerfile
+FROM alpine/git as clone
+WORKDIR /app
+RUN git clone https://github.com/IsraelHenriquee/redis-datafy.git .
+
+FROM python:3.9
+WORKDIR /app
+COPY --from=clone /app/requirements.txt .
+RUN pip install -r requirements.txt
+COPY --from=clone /app .
+CMD ["python3", "monitor.py"]
+```
 
 **Variáveis de Ambiente:**
 ```env
@@ -87,40 +111,7 @@ WEBHOOK_URL=https://seu-webhook.com/endpoint
 - Não precisa expor portas
 - Apenas faz conexão de saída para o webhook
 
-### Opção 2: Usando Dockerfile Multi-estágio
-
-Se preferir, você pode usar um único Dockerfile que clona o repositório e configura todos os serviços.
-Cole o seguinte conteúdo no campo "Dockerfile" do EasyPanel:
-
-```dockerfile
-# Primeiro estágio: Clonar o repositório
-FROM alpine/git as clone
-WORKDIR /app
-RUN git clone https://github.com/IsraelHenriquee/redis-datafy.git .
-
-# Serviço Redis
-FROM redis:7.2.3 as redis
-COPY --from=clone /app/redis.conf /usr/local/etc/redis/
-CMD ["redis-server", "/usr/local/etc/redis/redis.conf"]
-
-# Serviço API
-FROM python:3.9 as api
-WORKDIR /app
-COPY --from=clone /app/requirements.txt .
-RUN pip install -r requirements.txt
-COPY --from=clone /app .
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "api:app"]
-
-# Serviço Monitor
-FROM python:3.9 as monitor
-WORKDIR /app
-COPY --from=clone /app/requirements.txt .
-RUN pip install -r requirements.txt
-COPY --from=clone /app .
-CMD ["python3", "monitor.py"]
-```
-
-**Importante para ambas opções:**
+**Importante:**
 - Use exatamente o mesmo `REDIS_PASSWORD` em todos os serviços
 - O `REDIS_HOST` deve ser o nome do serviço Redis no EasyPanel
 - O `WEBHOOK_URL` só é necessário no serviço monitor
@@ -194,40 +185,40 @@ Mas lembre-se: ainda precisa configurar as variáveis de ambiente e portas no Ea
 
 ### redis-datafy (Redis)
 ```dockerfile
+FROM alpine/git as clone
+WORKDIR /app
+RUN git clone https://github.com/IsraelHenriquee/redis-datafy.git .
+
 FROM redis:7.2.3
-
-WORKDIR /usr/local/etc/redis
-
-COPY redis.conf .
-
-CMD ["redis-server", "redis.conf"]
+COPY --from=clone /app/redis.conf /usr/local/etc/redis/
+CMD ["redis-server", "/usr/local/etc/redis/redis.conf"]
 ```
 
 ### redis-api (API)
 ```dockerfile
-FROM python:3.9
-
+FROM alpine/git as clone
 WORKDIR /app
+RUN git clone https://github.com/IsraelHenriquee/redis-datafy.git .
 
-COPY requirements.txt .
+FROM python:3.9
+WORKDIR /app
+COPY --from=clone /app/requirements.txt .
 RUN pip install -r requirements.txt
-
-COPY . .
-
+COPY --from=clone /app .
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "api:app"]
 ```
 
 ### redis-monitor (Monitor)
 ```dockerfile
-FROM python:3.9
-
+FROM alpine/git as clone
 WORKDIR /app
+RUN git clone https://github.com/IsraelHenriquee/redis-datafy.git .
 
-COPY requirements.txt .
+FROM python:3.9
+WORKDIR /app
+COPY --from=clone /app/requirements.txt .
 RUN pip install -r requirements.txt
-
-COPY . .
-
+COPY --from=clone /app .
 CMD ["python3", "monitor.py"]
 ```
 
