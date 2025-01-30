@@ -36,15 +36,22 @@ def acquire_lock(lock_key, expire_seconds=10):
 async def send_webhook(payload):
     """Envia dados para o webhook de forma assíncrona"""
     try:
+        print(f"Tentando enviar webhook para: {WEBHOOK_URL}", flush=True)
+        print(f"Payload: {json.dumps(payload, indent=2)}", flush=True)
+        
         async with aiohttp.ClientSession() as session:
+            print("Iniciando request...", flush=True)
             async with session.post(WEBHOOK_URL, json=payload) as response:
                 status = response.status
+                text = await response.text()
+                print(f"Resposta do webhook: Status={status}, Body={text}", flush=True)
+                
                 if status != 200:
-                    text = await response.text()
                     print(f"Erro na resposta do webhook: {status} - {text}", flush=True)
                 return status == 200
     except Exception as e:
         print(f"Erro ao enviar webhook: {str(e)}", flush=True)
+        print(f"Tipo do erro: {type(e)}", flush=True)
         return False
 
 async def process_expired_chat(ttl_key):
@@ -80,7 +87,7 @@ async def process_expired_chat(ttl_key):
         
         # Prepara o payload
         payload = {
-            **chat_data["metadata"],  # Expande todos os campos de metadados
+            **chat_data["metadata"],  # Expanda todos os campos de metadados
             "user_id": chat_data["metadata"]["user"],  # Adiciona user_id igual ao user
             "messages": chat_data["messages"],  # Lista simples com as mensagens
             "processed_at": datetime.now().isoformat()
