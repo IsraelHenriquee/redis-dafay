@@ -39,10 +39,24 @@ WEBHOOK_URL = os.getenv('WEBHOOK_URL')
 RETRY_INTERVALS = [30, 180, 300]  # 30s, 3min, 5min
 
 # Cliente Redis do Upstash para logs
-upstash_client = redis.Redis.from_url(
-    os.getenv('UPSTASH_REDIS_URL'),
-    decode_responses=True
-)
+upstash_url = os.getenv('UPSTASH_REDIS_URL')
+if upstash_url:
+    # Parse da URL do Upstash
+    url_parts = upstash_url.replace('redis://', '').split('@')
+    auth = url_parts[0].split(':')
+    host_port = url_parts[1].split(':')
+    
+    upstash_client = redis.Redis(
+        host=host_port[0],
+        port=int(host_port[1]),
+        password=auth[1],
+        ssl=True,
+        decode_responses=True
+    )
+    print("✅ Conectado ao Upstash Redis", flush=True)
+else:
+    print("⚠️ UPSTASH_REDIS_URL não configurado!", flush=True)
+    upstash_client = None
 
 def save_error_log(error_type, source, error_message, details=None):
     """Salva log de erro no Upstash"""
