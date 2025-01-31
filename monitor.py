@@ -72,11 +72,20 @@ def save_error_log(error_type, source, error_message, details=None):
             "details": details or {}
         }
         
-        # Adiciona erro à lista do dia
-        upstash_client.rpush(key, json.dumps(error_data))
+        # Pega logs existentes ou cria lista vazia
+        current_logs = upstash_client.get(key)
+        if current_logs:
+            logs = json.loads(current_logs)
+        else:
+            logs = []
+        
+        # Adiciona novo log e salva
+        logs.append(error_data)
+        upstash_client.set(key, json.dumps(logs))
         
         # TTL de 30 dias
         upstash_client.expire(key, 60 * 60 * 24 * 30)
+        
     except Exception as e:
         print(f"[META-ERROR] Erro ao salvar log: {str(e)}", flush=True)
 
