@@ -28,7 +28,7 @@ O sistema é composto por 3 serviços que devem ser configurados na seguinte ord
 ```env
 REDIS_HOST=redis-datafy
 REDIS_PORT=6379
-REDIS_PASSWORD=sua_senha_aqui
+REDIS_PASSWORD=a897600ad44fa476a15a
 ```
 
 **Porta**: 5000 (HTTP)
@@ -45,8 +45,9 @@ REDIS_PASSWORD=sua_senha_aqui
 ```env
 REDIS_HOST=redis-datafy
 REDIS_PORT=6379
-REDIS_PASSWORD=sua_senha_aqui
+REDIS_PASSWORD=a897600ad44fa476a15a
 WEBHOOK_URL=https://painel.israelhenrique.com.br/webhook/process2
+UPSTASH_REDIS_URL=redis://default:sua-senha@seu-host.upstash.io:6379
 ```
 
 ## Passo a Passo
@@ -74,6 +75,51 @@ WEBHOOK_URL=https://painel.israelhenrique.com.br/webhook/process2
    - Selecione `Dockerfile.monitor`
    - Configure variáveis de ambiente
    - Deploy
+
+## Sistema de Logs (Upstash)
+
+O sistema usa o Upstash Redis para armazenar logs de erros e monitoramento. O Upstash é configurado apenas no serviço `redis-monitor`.
+
+### Configuração do Upstash
+
+1. **Variável de Ambiente Adicional no Monitor**:
+```env
+UPSTASH_REDIS_URL=redis://default:sua-senha@seu-host.upstash.io:6379
+```
+
+### Estrutura dos Logs
+
+Os logs são organizados por data:
+```
+logs:2025-01-31 → [
+    {
+        "timestamp": "2025-01-31T12:50:52",
+        "type": "CRITICAL|WARNING|ERROR",
+        "source": "monitor|message|webhook",
+        "error": "Descrição do erro",
+        "details": {
+            "user_id": "123-456",
+            "retry_count": 2,
+            "original_data": {...}
+        }
+    }
+]
+```
+
+### Ambiente Beta
+
+Para testar em ambiente beta:
+
+1. **Serviços**:
+   - `redis-datafy-beta`
+   - `redis-api-beta` (porta 5001)
+   - `redis-monitor-beta`
+
+2. **Variáveis**:
+   - Use `redis-datafy-beta` como REDIS_HOST
+   - Mesmo UPSTASH_REDIS_URL (logs separados por data)
+   - Mesmo REDIS_PASSWORD
+   - Webhook de teste (opcional)
 
 ## Importante
 
@@ -132,7 +178,7 @@ appendonly yes
 save 900 1
 save 300 10
 save 60 10000
-requirepass sua_senha_aqui
+requirepass a897600ad44fa476a15a
 ```
 
 ### requirements.txt

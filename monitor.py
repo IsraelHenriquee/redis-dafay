@@ -35,12 +35,99 @@ redis_client = redis.Redis(
 # URL do webhook do .env
 WEBHOOK_URL = os.getenv('WEBHOOK_URL')
 
-# Constantes para retry
+# Constantes para retry e Redis
 RETRY_INTERVALS = [30, 180, 300]  # 30s, 3min, 5min
 
-def acquire_lock(lock_key, expire_seconds=10):
-    """Tenta adquirir um lock"""
-    return redis_client.set(lock_key, '1', ex=expire_seconds, nx=True)
+# Cliente Redis do Upstash para logs
+upstash_url = os.getenv('UPSTASH_REDIS_URL')
+if upstash_url:
+    # Parse da URL do Upstash
+    url_parts = upstash_url.replace('redis://', '').split('@')
+    auth = url_parts[0].split(':')
+    host_port = url_parts[1].split(':')
+    
+    upstash_client = redis.Redis(
+        host=host_port[0],
+        port=int(host_port[1]),
+        password=auth[1],
+        ssl=True,
+        decode_responses=True
+    )
+    print("✅ Conectado ao Upstash Redis", flush=True)
+else:
+    print("⚠️ UPSTASH_REDIS_URL não configurado!", flush=True)
+    upstash_client = None
+
+def save_error_log(error_type, source, error_message, details=None):
+    """Salva log de erro no Upstash"""
+    try:
+        date = datetime.now().strftime('%Y-%m-%d')
+        key = f"logs:{date}"
+        
+        error_data = {
+            "timestamp": datetime.now().isoformat(),
+            "type": error_type,
+            "source": source,
+            "error": error_message,
+            "details": details or {}
+        }
+        
+        # Pega logs existentes ou cria lista vazia
+        current_logs = upstash_client.get(key)
+        if current_logs:
+            logs = json.loads(current_logs)
+        else:
+            logs = []
+        
+        # Adiciona novo log e salva
+        logs.append(error_data)
+        upstash_client.set(key, json.dumps(logs))
+        
+        # TTL de 30 dias
+        upstash_client.expire(key, 60 * 60 * 24 * 30)
+        
+    except Exception as e:
+        print(f"[META-ERROR] Erro ao salvar log: {str(e)}", flush=True)
+
+def save_user_message(user_id: str, message: str, metadata: dict = None):
+    """Salva mensagem do usuário no Redis"""
+    try:
+        ttl_key = get_ttl_key(user_id)
+        data_key = get_data_key(user_id)
+        ttl_value = metadata.get('ttl', 300) if metadata else 300
+        
+        if redis_client.exists(data_key):
+            # Recupera dados existentes
+            current_data = json.loads(redis_client.get(data_key))
+            messages = current_data.get("messages", [])
+            messages.append(message)
+            
+            # Nova estrutura com metadados novos e mensagens acumuladas
+            current_data = {
+                "messages": messages,
+                "metadata": metadata,
+                "retry_count": 0
+            }
+        else:
+            # Cria nova estrutura
+            current_data = {
+                "messages": [message],
+                "metadata": metadata,
+                "retry_count": 0
+            }
+        
+        # Salva no Redis
+        redis_client.set(data_key, json.dumps(current_data))
+        redis_client.set(ttl_key, "1")  # Valor dummy
+        redis_client.expire(ttl_key, ttl_value)
+        
+    except Exception as e:
+        error_msg = f"Erro ao salvar mensagem: {str(e)}"
+        print(f"[ERROR] {error_msg}", flush=True)
+        save_error_log("ERROR", "message", error_msg, {
+            "user_id": user_id,
+            "metadata": metadata
+        })
 
 async def send_webhook(payload):
     """Envia dados para o webhook de forma assíncrona"""
@@ -98,37 +185,10 @@ async def send_webhook(payload):
         print(f"Mensagem: {str(e)}", flush=True)
         return False
 
-def save_user_message(user_id: str, message: str, metadata: dict = None):
-    ttl_key = get_ttl_key(user_id)
-    data_key = get_data_key(user_id)
-    ttl_value = metadata.get('ttl', 300) if metadata else 300
-    
-    if redis_client.exists(ttl_key):
-        # Recupera dados existentes
-        current_data = json.loads(redis_client.get(data_key))
-        messages = current_data.get("messages", [])
-        messages.append(message)
-        
-        # Nova estrutura com metadados novos e mensagens acumuladas
-        current_data = {
-            "messages": messages,
-            "metadata": metadata,  # Usa exatamente os metadados que chegaram
-            "retry_count": 0  # Reseta contador de retry quando chega nova mensagem
-        }
-    else:
-        # Cria nova estrutura
-        current_data = {
-            "messages": [message],
-            "metadata": metadata,
-            "retry_count": 0
-        }
-    
-    # Salva no Redis e atualiza TTL
-    redis_client.set(data_key, json.dumps(current_data))
-    redis_client.expire(ttl_key, ttl_value)
-    redis_client.expire(data_key, ttl_value)
-
 async def process_expired_chat(ttl_key):
+    """Processa chat expirado"""
+    retry_count = 0
+    
     try:
         user_id = get_user_id_from_ttl_key(ttl_key)
         data_key = get_data_key(user_id)
@@ -136,6 +196,10 @@ async def process_expired_chat(ttl_key):
         # Recupera dados
         chat_data = json.loads(redis_client.get(data_key))
         if not chat_data:
+            save_error_log("WARNING", "process", "Dados não encontrados", {
+                "ttl_key": ttl_key,
+                "data_key": data_key
+            })
             return
             
         retry_count = chat_data.get("retry_count", 0)
@@ -148,39 +212,44 @@ async def process_expired_chat(ttl_key):
         }
         
         # Tenta enviar
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                WEBHOOK_URL,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as response:
-                if response.status == 200:
-                    # Sucesso: apaga as chaves
-                    print(f"[SUCCESS] Webhook enviado com sucesso após {retry_count} tentativas", flush=True)
-                    redis_client.delete(data_key)
-                    redis_client.delete(ttl_key)
-                else:
-                    if retry_count >= len(RETRY_INTERVALS):
-                        # Máximo de tentativas atingido
-                        print(f"[ERROR] Máximo de tentativas atingido. Apagando dados.", flush=True)
-                        redis_client.delete(data_key)
-                        redis_client.delete(ttl_key)
-                        return
-                    
-                    # Pega próximo intervalo de retry
-                    next_retry = RETRY_INTERVALS[retry_count]
-                    print(f"[RETRY] Tentativa {retry_count + 1}. Próxima tentativa em {next_retry}s", flush=True)
-                    
-                    # Atualiza contador de retry
-                    chat_data["retry_count"] = retry_count + 1
-                    redis_client.set(data_key, json.dumps(chat_data))
-                    
-                    # Atualiza TTL
-                    redis_client.expire(data_key, next_retry)
-                    redis_client.expire(ttl_key, next_retry)
-                    
+        if await send_webhook(payload):
+            # Sucesso: apaga as chaves
+            print(f"[SUCCESS] Webhook enviado com sucesso após {retry_count} tentativas", flush=True)
+            redis_client.delete(data_key)
+            redis_client.delete(ttl_key)
+        else:
+            if retry_count >= len(RETRY_INTERVALS):
+                error_msg = "Máximo de tentativas atingido"
+                print(f"[ERROR] {error_msg}", flush=True)
+                save_error_log("ERROR", "webhook", error_msg, {
+                    "user_id": user_id,
+                    "retry_count": retry_count,
+                    "status": 500
+                })
+                redis_client.delete(data_key)
+                redis_client.delete(ttl_key)
+                return
+            
+            # Pega próximo intervalo de retry
+            next_retry = RETRY_INTERVALS[retry_count]
+            print(f"[RETRY] Tentativa {retry_count + 1}. Próxima tentativa em {next_retry}s", flush=True)
+            
+            # Atualiza contador de retry
+            chat_data["retry_count"] = retry_count + 1
+            redis_client.set(data_key, json.dumps(chat_data))
+            
+            # Atualiza TTL apenas da chave de controle
+            redis_client.expire(ttl_key, next_retry)
+            
     except Exception as e:
-        print(f"[ERROR] Erro ao processar chat: {str(e)}", flush=True)
+        error_msg = f"Erro ao processar chat: {str(e)}"
+        print(f"[ERROR] {error_msg}", flush=True)
+        save_error_log("ERROR", "process", error_msg, {
+            "user_id": user_id if 'user_id' in locals() else None,
+            "retry_count": retry_count,
+            "ttl_key": ttl_key
+        })
+        
         # Trata erro como uma tentativa falha
         if retry_count >= len(RETRY_INTERVALS):
             redis_client.delete(data_key)
@@ -189,46 +258,44 @@ async def process_expired_chat(ttl_key):
             next_retry = RETRY_INTERVALS[retry_count]
             chat_data["retry_count"] = retry_count + 1
             redis_client.set(data_key, json.dumps(chat_data))
-            redis_client.expire(data_key, next_retry)
             redis_client.expire(ttl_key, next_retry)
 
 async def monitor():
-    """
-    Monitora chaves que expiram no Redis
-    """
-    pubsub = redis_client.pubsub()
-    pubsub.psubscribe('__keyevent@0__:expired')
-    
-    print("\nMonitorando chats que expiram...", flush=True)
-    print(f"Webhook configurado para: {WEBHOOK_URL}", flush=True)
-    
-    # Debug: Lista todas as chaves no Redis
-    print("\nChaves no Redis:", flush=True)
-    for key in redis_client.keys('*'):
-        ttl = redis_client.ttl(key)
-        print(f"- {key} (TTL: {ttl}s)", flush=True)
-    
-    try:
-        for message in pubsub.listen():
-            print(f"\nRecebeu mensagem do Redis: {message}", flush=True)
+    """Monitor principal"""
+    while True:
+        try:
+            pubsub = redis_client.pubsub()
+            pubsub.psubscribe('__keyevent@0__:expired')
             
-            if message['type'] == 'pmessage':
-                # Verifica se data já é string ou precisa decode
-                expired_key = message['data']
-                if isinstance(expired_key, bytes):
-                    expired_key = expired_key.decode('utf-8')
-                
-                print(f"Chave expirada: {expired_key}", flush=True)
+            print("🚀 Monitor iniciado", flush=True)
+            
+            while True:
+                message = pubsub.get_message()
+                if message and message['type'] == 'pmessage':
+                    # Verifica se data já é string ou precisa decode
+                    key = message['data']
+                    if isinstance(key, bytes):
+                        key = key.decode('utf-8')
                     
-                if expired_key.startswith(f"{REDIS_PREFIX_TTL}:"):  # Usa constante
-                    print(f"✨ Processando chave: {expired_key}", flush=True)
-                    await process_expired_chat(expired_key)
-                else:
-                    print(f"❌ Chave não é do chat: {expired_key}", flush=True)
-    except Exception as e:
-        print(f"Erro no monitor: {str(e)}", flush=True)
-    finally:
-        pubsub.close()
+                    print(f"\nRecebeu mensagem do Redis: {message}", flush=True)
+                    print(f"Chave expirada: {key}", flush=True)
+                    
+                    if key.startswith(f"{REDIS_PREFIX_TTL}:"):
+                        print(f"✅ Processando chat: {key}", flush=True)
+                        await process_expired_chat(key)
+                    else:
+                        print(f"❌ Chave não é do chat: {key}", flush=True)
+                        
+                await asyncio.sleep(0.1)
+                
+        except Exception as e:
+            error_msg = f"Erro crítico no monitor: {str(e)}"
+            print(f"[CRITICAL] {error_msg}", flush=True)
+            save_error_log("CRITICAL", "monitor", error_msg)
+            
+            # Espera 1 segundo e tenta reiniciar
+            await asyncio.sleep(1)
+            continue
 
 if __name__ == "__main__":
     load_dotenv()
@@ -238,6 +305,7 @@ if __name__ == "__main__":
     print(f"REDIS_HOST: {os.getenv('REDIS_HOST')}", flush=True)
     print(f"REDIS_PORT: {os.getenv('REDIS_PORT')}", flush=True)
     print(f"WEBHOOK_URL: {os.getenv('WEBHOOK_URL')}", flush=True)
+    print(f"UPSTASH_REDIS_URL: {os.getenv('UPSTASH_REDIS_URL')}", flush=True)
     print("==========================", flush=True)
     
     try:
