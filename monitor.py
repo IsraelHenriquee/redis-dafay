@@ -10,7 +10,8 @@ from dotenv import load_dotenv
 from constants import (
     REDIS_PREFIX_TTL,
     get_data_key,
-    get_user_id_from_ttl_key
+    get_user_id_from_ttl_key,
+    get_ttl_key
 )
 
 # Força flush imediato dos prints
@@ -93,6 +94,31 @@ async def send_webhook(payload):
         print(f"Tipo: {type(e)}", flush=True)
         print(f"Mensagem: {str(e)}", flush=True)
         return False
+
+def save_user_message(user_id: str, message: str, metadata: dict = None):
+    ttl_key = get_ttl_key(user_id)
+    data_key = get_data_key(user_id)
+    
+    if redis_client.exists(ttl_key):
+        # Recupera dados existentes
+        current_data = json.loads(redis_client.get(data_key))
+        
+        # Adiciona nova mensagem
+        current_data["messages"].append(message)
+        
+        # Atualiza metadados
+        if metadata:
+            current_data["metadata"].update(metadata)
+    else:
+        # Cria nova estrutura
+        current_data = {
+            "messages": [message],
+            "metadata": metadata or {}
+        }
+    
+    # Salva no Redis
+    redis_client.set(data_key, json.dumps(current_data))
+    redis_client.expire(ttl_key, 300)
 
 async def process_expired_chat(ttl_key):
     """
