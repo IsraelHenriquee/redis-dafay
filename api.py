@@ -59,6 +59,7 @@ def save_message():
     try:
         # Pega o JSON do request
         payload = request.json
+        print(f"[DEBUG] Payload recebido na API: {json.dumps(payload, indent=2)}", flush=True)
         
         # Validações básicas
         if not payload:
