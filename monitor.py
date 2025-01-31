@@ -98,27 +98,30 @@ async def send_webhook(payload):
 def save_user_message(user_id: str, message: str, metadata: dict = None):
     ttl_key = get_ttl_key(user_id)
     data_key = get_data_key(user_id)
+    ttl_value = metadata.get('ttl', 300) if metadata else 300
     
     if redis_client.exists(ttl_key):
-        # Recupera dados existentes
+        # Recupera apenas as mensagens anteriores
         current_data = json.loads(redis_client.get(data_key))
+        messages = current_data.get("messages", [])
+        messages.append(message)
         
-        # Adiciona nova mensagem
-        current_data["messages"].append(message)
-        
-        # Atualiza metadados
-        if metadata:
-            current_data["metadata"].update(metadata)
+        # Nova estrutura com metadados novos e mensagens acumuladas
+        current_data = {
+            "messages": messages,
+            "metadata": metadata  # Usa exatamente os metadados que chegaram
+        }
     else:
         # Cria nova estrutura
         current_data = {
             "messages": [message],
-            "metadata": metadata or {}
+            "metadata": metadata
         }
     
-    # Salva no Redis
+    # Salva no Redis e atualiza TTL
     redis_client.set(data_key, json.dumps(current_data))
-    redis_client.expire(ttl_key, 300)
+    redis_client.expire(ttl_key, ttl_value)
+    redis_client.expire(data_key, ttl_value)
 
 async def process_expired_chat(ttl_key):
     """
@@ -143,9 +146,8 @@ async def process_expired_chat(ttl_key):
         
         # Monta o payload mantendo todos os campos originais
         payload = {
-            **chat_data["metadata"],  # Expande todos os campos de metadados
-            "user_id": chat_data["metadata"]["user"],  # Adiciona user_id igual ao user
-            "listamessages": chat_data["messages"],  # Lista de mensagens
+            **chat_data["metadata"],  # Todos os campos exatamente como estão
+            "listamessages": chat_data["messages"],  # Lista acumulada de mensagens
             "processed_at": datetime.now().isoformat()  # Timestamp do processamento
         }
         
