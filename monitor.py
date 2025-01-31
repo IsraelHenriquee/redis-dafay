@@ -141,12 +141,12 @@ async def process_expired_chat(ttl_key):
         # Converte de JSON
         chat_data = json.loads(chat_data)
         
-        # Monta o payload
+        # Monta o payload mantendo todos os campos originais
         payload = {
-            **chat_data["metadata"],  # Expanda todos os campos de metadados
+            **chat_data["metadata"],  # Expande todos os campos de metadados
             "user_id": chat_data["metadata"]["user"],  # Adiciona user_id igual ao user
-            "listamessages": chat_data["messages"],  # Alterado aqui
-            "processed_at": datetime.now().isoformat()
+            "listamessages": chat_data["messages"],  # Lista de mensagens
+            "processed_at": datetime.now().isoformat()  # Timestamp do processamento
         }
         
         print(f"Enviando payload para webhook: {json.dumps(payload, indent=2)}", flush=True)
