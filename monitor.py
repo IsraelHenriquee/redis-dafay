@@ -272,7 +272,11 @@ async def monitor():
             while True:
                 message = pubsub.get_message()
                 if message and message['type'] == 'pmessage':
-                    key = message['data']  # Já está decodificado
+                    # Verifica se data já é string ou precisa decode
+                    key = message['data']
+                    if isinstance(key, bytes):
+                        key = key.decode('utf-8')
+                    
                     print(f"\nRecebeu mensagem do Redis: {message}", flush=True)
                     print(f"Chave expirada: {key}", flush=True)
                     
