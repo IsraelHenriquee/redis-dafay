@@ -129,7 +129,38 @@ def save_user_message(user_id: str, message: str, metadata: dict = None):
             "metadata": metadata
         })
 
-async def send_webhook(payload):
+def save_webhook_log(user_id: str, payload: dict, status: str, response: dict = None):
+    """Salva log do webhook no Upstash
+    
+    Args:
+        user_id: ID do usuário
+        payload: Payload enviado
+        status: Status do envio (sending, success, error)
+        response: Resposta do webhook (opcional)
+    """
+    try:
+        # Formato: 04-02-2025-13-21-45-123
+        timestamp = datetime.now().strftime('%d-%m-%Y-%H-%M-%S-%f')[:-3]
+        key = f"webhook:{user_id}:{timestamp}"
+        
+        log_data = {
+            "timestamp": datetime.now().isoformat(),
+            "user_id": user_id,
+            "payload": payload,
+            "status": status
+        }
+        
+        if response:
+            log_data["response"] = response
+            
+        upstash_client.set(key, json.dumps(log_data))
+        # Expira em 30 dias
+        upstash_client.expire(key, 60 * 60 * 24 * 30)
+        
+    except Exception as e:
+        print(f"❌ Erro ao salvar log no Upstash: {str(e)}", flush=True)
+
+async def send_webhook(payload, user_id):
     """Envia dados para o webhook de forma assíncrona"""
     # Remove barra final se existir
     webhook_url = WEBHOOK_URL.rstrip('/')
@@ -139,126 +170,129 @@ async def send_webhook(payload):
         print(f"URL: {webhook_url}", flush=True)
         print(f"Payload: {json.dumps(payload, indent=2)}", flush=True)
         
-        timeout = aiohttp.ClientTimeout(total=30)
+        # Salva log de envio
+        save_webhook_log(user_id, payload, "sending")
         
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        # Aumentado para 61 segundos para dar margem ao timeout do servidor (60s)
+        timeout = aiohttp.ClientTimeout(total=61)
+        
+        async with aiohttp.ClientSession() as session:
             print("\nIniciando request...", flush=True)
             
-            async with session.post(
-                webhook_url,
-                json=payload,
-                ssl=False,
-                headers={
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'Redis-Monitor/1.0'
-                }
-            ) as response:
-                status = response.status
-                text = await response.text()
-                
-                print(f"\nResposta do webhook:", flush=True)
-                print(f"Status: {status}", flush=True)
-                print(f"Body: {text}", flush=True)
-                
-                if status == 200:
-                    print("\n✅ Webhook enviado com sucesso!", flush=True)
-                else:
-                    print(f"\n❌ Erro na resposta do webhook:", flush=True)
+            try:
+                async with session.post(
+                    webhook_url,
+                    json=payload,
+                    ssl=False,
+                    timeout=timeout,
+                    headers={
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Redis-Monitor/1.0'
+                    }
+                ) as response:
+                    status = response.status
+                    text = await response.text()
+                    
+                    print(f"\nResposta do webhook:", flush=True)
                     print(f"Status: {status}", flush=True)
                     print(f"Body: {text}", flush=True)
-                
-                return status == 200
+                    
+                    response_data = {
+                        "status_code": status,
+                        "body": text
+                    }
+                    
+                    if status == 200:
+                        print("\n✅ Webhook enviado com sucesso!", flush=True)
+                        save_webhook_log(user_id, payload, "success", response_data)
+                    else:
+                        print(f"\n❌ Erro na resposta do webhook:", flush=True)
+                        print(f"Status: {status}", flush=True)
+                        print(f"Body: {text}", flush=True)
+                        save_webhook_log(user_id, payload, "error", response_data)
+                    
+                    return status == 200
+            
+            except asyncio.TimeoutError:
+                print(f"\n❌ Timeout ao enviar webhook", flush=True)
+                print(f"O servidor não respondeu em 61 segundos", flush=True)
+                save_webhook_log(user_id, payload, "error", {
+                    "error": "timeout",
+                    "message": "O servidor não respondeu em 61 segundos"
+                })
+                # Força cancelamento da request
+                await session.close()
+                return False
                 
     except aiohttp.ClientConnectorError as e:
-        print(f"\n❌ Não conseguiu conectar ao servidor:", flush=True)
-        print(f"Erro: {str(e)}", flush=True)
-        return False
-        
-    except asyncio.TimeoutError:
-        print(f"\n❌ Timeout ao enviar webhook", flush=True)
-        print(f"O servidor não respondeu em 30 segundos", flush=True)
+        error_msg = f"Não conseguiu conectar ao servidor: {str(e)}"
+        print(f"\n❌ {error_msg}", flush=True)
+        save_webhook_log(user_id, payload, "error", {
+            "error": "connection_error",
+            "message": error_msg
+        })
         return False
         
     except Exception as e:
-        print(f"\n❌ ERRO GRAVE ao enviar webhook:", flush=True)
+        error_msg = f"ERRO GRAVE ao enviar webhook: {str(e)}"
+        print(f"\n❌ {error_msg}", flush=True)
         print(f"Tipo: {type(e)}", flush=True)
-        print(f"Mensagem: {str(e)}", flush=True)
+        save_webhook_log(user_id, payload, "error", {
+            "error": "unknown_error",
+            "message": error_msg,
+            "type": str(type(e))
+        })
         return False
+
+# Controle global de chats em processamento com timestamp
+PROCESSING_CHATS = {}  # user_id -> (timestamp, retry_count)
 
 async def process_expired_chat(ttl_key):
     """Processa chat expirado"""
-    retry_count = 0
-    
     try:
         user_id = get_user_id_from_ttl_key(ttl_key)
         data_key = get_data_key(user_id)
+        queue_key = f"chat:QUEUE:{user_id}"
         
-        # Recupera dados
-        chat_data = json.loads(redis_client.get(data_key))
-        if not chat_data:
-            save_error_log("WARNING", "process", "Dados não encontrados", {
-                "ttl_key": ttl_key,
-                "data_key": data_key
-            })
-            return
+        try:
+            # Recupera dados
+            chat_data = json.loads(redis_client.get(data_key))
+            if not chat_data:
+                save_error_log("WARNING", "process", "Dados não encontrados", {
+                    "ttl_key": ttl_key,
+                    "data_key": data_key
+                })
+                return
+                
+            # Monta payload
+            payload = {
+                **chat_data["metadata"],
+                "listamessages": chat_data["messages"],
+                "processed_at": datetime.now().isoformat()
+            }
             
-        retry_count = chat_data.get("retry_count", 0)
-        
-        # Monta payload
-        payload = {
-            **chat_data["metadata"],
-            "listamessages": chat_data["messages"],
-            "processed_at": datetime.now().isoformat()
-        }
-        
-        # Tenta enviar
-        if await send_webhook(payload):
-            # Sucesso: apaga as chaves
-            print(f"[SUCCESS] Webhook enviado com sucesso após {retry_count} tentativas", flush=True)
+            # Adiciona na fila
+            redis_client.rpush(queue_key, json.dumps(payload))
+            print(f"✅ Mensagem adicionada na fila: {queue_key}", flush=True)
+            
+            # Limpa dados originais
             redis_client.delete(data_key)
             redis_client.delete(ttl_key)
-        else:
-            if retry_count >= len(RETRY_INTERVALS):
-                error_msg = "Máximo de tentativas atingido"
-                print(f"[ERROR] {error_msg}", flush=True)
-                save_error_log("ERROR", "webhook", error_msg, {
-                    "user_id": user_id,
-                    "retry_count": retry_count,
-                    "status": 500
-                })
-                redis_client.delete(data_key)
-                redis_client.delete(ttl_key)
-                return
-            
-            # Pega próximo intervalo de retry
-            next_retry = RETRY_INTERVALS[retry_count]
-            print(f"[RETRY] Tentativa {retry_count + 1}. Próxima tentativa em {next_retry}s", flush=True)
-            
-            # Atualiza contador de retry
-            chat_data["retry_count"] = retry_count + 1
-            redis_client.set(data_key, json.dumps(chat_data))
-            
-            # Atualiza TTL apenas da chave de controle
-            redis_client.expire(ttl_key, next_retry)
+                
+        except Exception as e:
+            error_msg = f"Erro ao processar chat: {str(e)}"
+            print(f"❌ {error_msg}", flush=True)
+            save_error_log("ERROR", "process", error_msg, {
+                "user_id": user_id,
+                "ttl_key": ttl_key
+            })
             
     except Exception as e:
         error_msg = f"Erro ao processar chat: {str(e)}"
-        print(f"[ERROR] {error_msg}", flush=True)
+        print(f"❌ {error_msg}", flush=True)
         save_error_log("ERROR", "process", error_msg, {
-            "user_id": user_id if 'user_id' in locals() else None,
-            "retry_count": retry_count,
             "ttl_key": ttl_key
         })
-        
-        # Trata erro como uma tentativa falha
-        if retry_count >= len(RETRY_INTERVALS):
-            redis_client.delete(data_key)
-            redis_client.delete(ttl_key)
-        else:
-            next_retry = RETRY_INTERVALS[retry_count]
-            chat_data["retry_count"] = retry_count + 1
-            redis_client.set(data_key, json.dumps(chat_data))
-            redis_client.expire(ttl_key, next_retry)
 
 async def monitor():
     """Monitor principal"""
