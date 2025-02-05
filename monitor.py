@@ -100,27 +100,16 @@ async def process_expired_chat(ttl_key):
             
         chat_data = json.loads(chat_data)
         
-        # Prepara payload
+        # Prepara payload (dinâmico)
         payload = {
-            "user": user_id,
-            "id_agente": chat_data.get("metadata", {}).get("id_agente"),
-            "numero_conectado": chat_data.get("metadata", {}).get("numero_conectado"),
-            "foto": chat_data.get("metadata", {}).get("foto"),
-            "phone": chat_data.get("metadata", {}).get("phone"),
-            "sender_name": chat_data.get("metadata", {}).get("sender_name"),
-            "chave": chat_data.get("metadata", {}).get("chave", ""),
-            "instance_id": chat_data.get("metadata", {}).get("instance_id"),
-            "servidor": chat_data.get("metadata", {}).get("servidor"),
-            "token": chat_data.get("metadata", {}).get("token"),
-            "token_seguranca": chat_data.get("metadata", {}).get("token_seguranca"),
-            "modo": chat_data.get("metadata", {}).get("modo"),
-            "plataforma_ia": chat_data.get("metadata", {}).get("plataforma_ia", 2),
-            "server_url": chat_data.get("metadata", {}).get("server_url", "-"),
-            "provider": chat_data.get("metadata", {}).get("provider", 1),
-            "id_instancia": chat_data.get("metadata", {}).get("id_instancia"),
-            "listamessages": chat_data.get("messages", []),
-            "processed_at": datetime.now().isoformat()
+            "user": user_id,  # Único campo fixo que precisamos
+            "listamessages": chat_data.get("messages", []),  # Lista de mensagens
+            "processed_at": datetime.now().isoformat()  # Timestamp do processamento
         }
+        
+        # Adiciona todos os campos do metadata
+        if "metadata" in chat_data:
+            payload.update(chat_data["metadata"])
         
         # Adiciona na fila
         queue_key = f"chat:QUEUE:{user_id}"
