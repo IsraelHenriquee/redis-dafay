@@ -22,7 +22,7 @@ BR_TIMEZONE = timezone(timedelta(hours=-3))
 
 class WebhookWorker:
     def __init__(self):
-        self.max_slots = 15
+        self.max_slots = 50  # Aumentado para 50 mensagens simultâneas
         self.active_slots = 0
         self.processing = set()
         self.max_retries = 3
