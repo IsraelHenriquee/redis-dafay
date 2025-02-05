@@ -18,12 +18,43 @@ HTML = """
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        pre {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .card {
+            margin-bottom: 20px;
+        }
+        .attempt {
+            border-left: 4px solid #6c757d;
+            padding-left: 10px;
+            margin-bottom: 10px;
+        }
+        .attempt.success {
+            border-left-color: #198754;
+        }
+        .attempt.error {
+            border-left-color: #dc3545;
+        }
+    </style>
     <script>
         function refreshPage() {
             location.reload();
         }
-        // Auto refresh a cada 5 segundos
         setInterval(refreshPage, 5000);
+        
+        function togglePayload(id) {
+            const el = document.getElementById(id);
+            if (el.style.display === 'none') {
+                el.style.display = 'block';
+            } else {
+                el.style.display = 'none';
+            }
+        }
     </script>
 </head>
 <body>
@@ -31,17 +62,53 @@ HTML = """
         <h1>Redis Dashboard</h1>
         <div class="row mt-4">
             <!-- Webhooks -->
-            <div class="col-md-6 mb-4">
+            <div class="col-md-12 mb-4">
                 <div class="card">
                     <div class="card-header bg-primary text-white">
                         <h5 class="card-title mb-0">📝 Logs de Webhook ({{ webhooks|length }})</h5>
                     </div>
                     <div class="card-body">
                         {% for webhook in webhooks %}
-                        <div class="mb-3 p-2 border rounded">
-                            <strong>Usuário:</strong> {{ webhook.user_id }}<br>
-                            <strong>Tentativas:</strong> {{ webhook.total_attempts }}<br>
-                            <strong>Última atualização:</strong> {{ webhook.updated_at }}<br>
+                        <div class="mb-4 p-3 border rounded">
+                            <h6>Usuário: {{ webhook.user_id }}</h6>
+                            <div class="text-muted small">
+                                Criado em: {{ webhook.created_at }}<br>
+                                Total tentativas: {{ webhook.total_attempts }}<br>
+                                Última atualização: {{ webhook.updated_at }}
+                            </div>
+                            
+                            <div class="mt-3">
+                                <h6>Tentativas:</h6>
+                                {% for attempt in webhook.attempts %}
+                                <div class="attempt {{ attempt.status }}">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div>
+                                            <strong>Status:</strong> 
+                                            {% if attempt.status == 'success' %}
+                                                <span class="text-success">✅ Sucesso</span>
+                                            {% elif attempt.status == 'error' %}
+                                                <span class="text-danger">❌ Erro</span>
+                                            {% else %}
+                                                <span class="text-warning">⚠️ {{ attempt.status }}</span>
+                                            {% endif %}
+                                            <br>
+                                            <small class="text-muted">{{ attempt.timestamp }}</small>
+                                        </div>
+                                        <button class="btn btn-sm btn-outline-secondary" 
+                                                onclick="togglePayload('payload-{{ loop.index }}-{{ webhook.user_id }}')">
+                                            Ver Payload
+                                        </button>
+                                    </div>
+                                    <div id="payload-{{ loop.index }}-{{ webhook.user_id }}" style="display: none;" class="mt-2">
+                                        <pre><code>{{ attempt.payload|tojson(indent=2) }}</code></pre>
+                                        {% if attempt.response %}
+                                        <strong>Resposta:</strong>
+                                        <pre><code>{{ attempt.response|tojson(indent=2) }}</code></pre>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                {% endfor %}
+                            </div>
                         </div>
                         {% endfor %}
                     </div>
@@ -60,6 +127,17 @@ HTML = """
                             <strong>Fila:</strong> {{ queue.name }}<br>
                             <strong>Mensagens:</strong> {{ queue.size }}<br>
                             <strong>TTL:</strong> {{ queue.ttl }}s<br>
+                            {% if queue.messages %}
+                            <div class="mt-2">
+                                <button class="btn btn-sm btn-outline-secondary" 
+                                        onclick="togglePayload('queue-{{ loop.index }}')">
+                                    Ver Mensagens
+                                </button>
+                                <div id="queue-{{ loop.index }}" style="display: none;" class="mt-2">
+                                    <pre><code>{{ queue.messages|tojson(indent=2) }}</code></pre>
+                                </div>
+                            </div>
+                            {% endif %}
                         </div>
                         {% endfor %}
                     </div>
@@ -67,23 +145,28 @@ HTML = """
             </div>
             
             <!-- Chats -->
-            <div class="col-md-12">
+            <div class="col-md-6">
                 <div class="card">
                     <div class="card-header bg-info text-white">
                         <h5 class="card-title mb-0">💬 Chats ({{ chats|length }})</h5>
                     </div>
                     <div class="card-body">
-                        <div class="row">
                         {% for chat in chats %}
-                        <div class="col-md-4 mb-3">
-                            <div class="p-2 border rounded">
-                                <strong>Chat:</strong> {{ chat.id }}<br>
-                                <strong>Usuário:</strong> {{ chat.user_id }}<br>
-                                <strong>Mensagens:</strong> {{ chat.messages }}<br>
+                        <div class="mb-3 p-2 border rounded">
+                            <strong>Chat:</strong> {{ chat.id }}<br>
+                            <strong>Usuário:</strong> {{ chat.user_id }}<br>
+                            <strong>Mensagens:</strong> {{ chat.messages }}<br>
+                            <div class="mt-2">
+                                <button class="btn btn-sm btn-outline-secondary" 
+                                        onclick="togglePayload('chat-{{ loop.index }}')">
+                                    Ver Dados
+                                </button>
+                                <div id="chat-{{ loop.index }}" style="display: none;" class="mt-2">
+                                    <pre><code>{{ chat.data|tojson(indent=2) }}</code></pre>
+                                </div>
                             </div>
                         </div>
                         {% endfor %}
-                        </div>
                     </div>
                 </div>
             </div>
@@ -109,19 +192,23 @@ def dashboard():
     webhooks = []
     for key in redis_client.keys("webhook:user:*"):
         data = json.loads(redis_client.get(key))
-        webhooks.append({
-            'user_id': data['user_id'],
-            'total_attempts': data.get('total_attempts', 0),
-            'updated_at': data.get('updated_at', 'N/A')
-        })
+        webhooks.append(data)  # Agora pegamos todos os dados
     
     # Filas
     queues = []
     for key in redis_client.keys("chat:QUEUE:*"):
+        messages = []
+        # Pega até 5 mensagens da fila sem remover
+        for i in range(min(5, redis_client.llen(key))):
+            msg = redis_client.lindex(key, i)
+            if msg:
+                messages.append(json.loads(msg))
+                
         queues.append({
             'name': key,
             'size': redis_client.llen(key),
-            'ttl': redis_client.ttl(key)
+            'ttl': redis_client.ttl(key),
+            'messages': messages
         })
     
     # Chats
@@ -131,7 +218,8 @@ def dashboard():
         chats.append({
             'id': key,
             'user_id': data.get('user_id', 'N/A'),
-            'messages': len(data.get('messages', []))
+            'messages': len(data.get('messages', [])),
+            'data': data
         })
     
     return render_template_string(HTML, 
