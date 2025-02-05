@@ -102,19 +102,17 @@ class WebhookWorker:
                     "timestamp": datetime.now().isoformat(),
                     "user_id": user_id,
                     "payload": payload,
-                    "status": status
+                    "status": status,
+                    "response": response
                 }
-                
-                if response:
-                    log_data["response"] = response
                     
                 # Tenta salvar
                 print("Salvando dados...", flush=True)
                 result = self.upstash_client.set(key, json.dumps(log_data))
                 print(f"Resultado set: {result}", flush=True)
                 
-                # Expira em 30 dias
-                result = self.upstash_client.expire(key, 60 * 60 * 24 * 30)
+                # Expira em 2 dias
+                result = self.upstash_client.expire(key, 60 * 60 * 24 * 2)
                 print(f"Resultado expire: {result}", flush=True)
                 
                 print("✅ Log salvo com sucesso!", flush=True)
@@ -138,71 +136,44 @@ class WebhookWorker:
             print(f"URL: {self.webhook_url}", flush=True)
             print(f"Payload: {json.dumps(payload, indent=2)}", flush=True)
             
-            # Log de envio
-            self.save_webhook_log(user_id, payload, "sending")
-            
-            # Timeout de 61s (margem pro servidor de 60s)
-            timeout = aiohttp.ClientTimeout(total=61)
-            
             async with aiohttp.ClientSession() as session:
-                print("\nIniciando request...", flush=True)
-                
-                try:
-                    async with session.post(
-                        self.webhook_url,
-                        json=payload,
-                        ssl=False,
-                        timeout=timeout,
-                        headers={
-                            'Content-Type': 'application/json',
-                            'User-Agent': 'Redis-Worker/1.0'
-                        }
-                    ) as response:
-                        status = response.status
-                        text = await response.text()
-                        
-                        print(f"\nResposta do webhook:", flush=True)
-                        print(f"Status: {status}", flush=True)
-                        print(f"Body: {text}", flush=True)
-                        
-                        response_data = {
-                            "status_code": status,
-                            "body": text
-                        }
-                        
-                        # Log de sucesso/erro baseado no status
-                        if 200 <= status < 300:
-                            self.save_webhook_log(user_id, payload, "success", response_data)
-                            return True
-                        else:
-                            self.save_webhook_log(user_id, payload, "error", response_data)
-                            return False
-                            
-                except asyncio.TimeoutError:
-                    error_msg = "Timeout ao enviar webhook"
-                    print(f"❌ {error_msg}", flush=True)
-                    self.save_webhook_log(user_id, payload, "error", {
-                        "error": error_msg,
-                        "type": "timeout"
-                    })
-                    return False
+                async with session.post(self.webhook_url, json=payload) as response:
+                    print("\nIniciando request...\n", flush=True)
                     
-                except Exception as e:
-                    error_msg = f"Erro ao enviar webhook: {str(e)}"
-                    print(f"❌ {error_msg}", flush=True)
-                    self.save_webhook_log(user_id, payload, "error", {
-                        "error": error_msg,
-                        "type": "request_error"
-                    })
-                    return False
+                    # Lê resposta
+                    response_json = None
+                    try:
+                        response_json = await response.json()
+                    except:
+                        response_json = await response.text()
+                        
+                    print(f"\nResposta do webhook:", flush=True)
+                    print(f"Status: {response.status}", flush=True)
+                    print(f"Body: {response_json}", flush=True)
+                    
+                    # Salva log apenas quando recebe resposta
+                    self.save_webhook_log(
+                        user_id=user_id,
+                        payload=payload,
+                        status="success" if response.status == 200 else "error",
+                        response={
+                            "status": response.status,
+                            "body": response_json
+                        }
+                    )
+                    
+                    return response.status == 200
                     
         except Exception as e:
-            error_msg = f"Erro geral ao processar webhook: {str(e)}"
-            print(f"❌ {error_msg}", flush=True)
-            self.save_webhook_log(user_id, payload, "error", {
-                "error": error_msg,
-                "type": "general_error"
-            })
+            print(f"❌ Erro ao enviar webhook: {str(e)}", flush=True)
+            
+            # Salva log de erro
+            self.save_webhook_log(
+                user_id=user_id,
+                payload=payload,
+                status="error",
+                response={"error": str(e)}
+            )
             return False
             
     async def process_message(self, queue_key: str, message_data: dict):
