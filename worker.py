@@ -5,7 +5,7 @@ import aiohttp
 import time
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from constants import (
     REDIS_PREFIX_TTL,
@@ -16,6 +16,9 @@ from constants import (
 
 # Força flush imediato dos prints
 sys.stdout.reconfigure(line_buffering=True)
+
+# Timezone Brasil (UTC-3)
+BR_TIMEZONE = timezone(timedelta(hours=-3))
 
 class WebhookWorker:
     def __init__(self):
@@ -99,13 +102,13 @@ class WebhookWorker:
             else:
                 logs = {
                     "user_id": user_id,
-                    "created_at": datetime.now().isoformat(),
+                    "created_at": datetime.now(BR_TIMEZONE).isoformat(),
                     "attempts": []
                 }
             
             # Adiciona nova tentativa
             attempt = {
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(BR_TIMEZONE).isoformat(),
                 "payload": payload,
                 "status": status
             }
@@ -114,7 +117,7 @@ class WebhookWorker:
                 attempt["response"] = response
                 
             logs["attempts"].append(attempt)
-            logs["updated_at"] = datetime.now().isoformat()
+            logs["updated_at"] = datetime.now(BR_TIMEZONE).isoformat()
             logs["total_attempts"] = len(logs["attempts"])
             
             # Salva no Upstash
