@@ -37,7 +37,7 @@ class WebhookWorker:
         # Cliente Redis do Upstash para logs
         upstash_url = os.getenv('UPSTASH_REDIS_URL')
         print(f"\n=== CONFIGURANDO UPSTASH ===", flush=True)
-        if upstash_url:
+        if upstash_url and "upstash.io" in upstash_url:
             try:
                 print(f"URL Upstash: {upstash_url}", flush=True)
                 url_parts = upstash_url.replace('redis://', '').split('@')
@@ -54,9 +54,11 @@ class WebhookWorker:
                     username=auth[0],
                     password=auth[1],
                     decode_responses=True,
-                    socket_timeout=5,  # Timeout de 5s
-                    socket_connect_timeout=5,  # Timeout de conexão
-                    retry_on_timeout=True  # Tenta reconectar se der timeout
+                    socket_timeout=5,
+                    socket_connect_timeout=5,
+                    retry_on_timeout=True,
+                    ssl=True,  # Upstash requer SSL
+                    ssl_cert_reqs=None  # Não valida certificado
                 )
                 
                 # Testa conexão
@@ -66,8 +68,12 @@ class WebhookWorker:
                     print("❌ Erro ao conectar no Upstash - ping falhou", flush=True)
             except Exception as e:
                 print(f"❌ Erro ao configurar Upstash: {str(e)}", flush=True)
+                print(f"Tipo do erro: {type(e)}", flush=True)
+                # Continua sem Upstash
+                self.upstash_client = None
         else:
-            print("⚠️ URL do Upstash não configurada", flush=True)
+            print("⚠️ URL do Upstash não configurada ou inválida", flush=True)
+            self.upstash_client = None
         
         self.webhook_url = os.getenv('WEBHOOK_URL', '').rstrip('/')
         
