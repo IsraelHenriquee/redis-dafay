@@ -80,56 +80,52 @@ class WebhookWorker:
         self.webhook_url = os.getenv('WEBHOOK_URL', '').rstrip('/')
         
     def save_webhook_log(self, user_id: str, payload: dict, status: str, response: dict = None):
-        """Salva log do webhook no Upstash"""
+        """Salva log do webhook no Upstash
+        
+        Args:
+            user_id: ID do usuário
+            payload: Payload enviado
+            status: Status do envio (sending, success, error, discarded)
+            response: Resposta do webhook (opcional)
+        """
         try:
-            # Se não tem Upstash configurado, só ignora
-            if not hasattr(self, 'upstash_client'):
-                print("⚠️ Cliente Upstash não configurado", flush=True)
-                return
-                
-            # Tenta reconectar se perdeu conexão
-            try:
-                if not self.upstash_client.ping():
-                    print("⚠️ Ping falhou, tentando reconectar...", flush=True)
-                    raise ConnectionError("Ping falhou")
-                    
-                # Formato: 04-02-2025-20-47-45-123
-                timestamp = datetime.now().strftime('%d-%m-%Y-%H-%M-%S-%f')[:-3]
-                key = f"webhook:{user_id}:{timestamp}"
-                
-                print(f"\n=== SALVANDO LOG NO UPSTASH ===", flush=True)
-                print(f"Key: {key}", flush=True)
-                
-                log_data = {
-                    "timestamp": datetime.now().isoformat(),
+            # Chave única por usuário
+            key = f"webhook:user:{user_id}"
+            
+            # Pega logs existentes ou cria novo
+            current_logs = self.upstash_client.get(key)
+            if current_logs:
+                logs = json.loads(current_logs)
+            else:
+                logs = {
                     "user_id": user_id,
-                    "payload": payload,
-                    "status": status,
-                    "response": response
+                    "created_at": datetime.now().isoformat(),
+                    "attempts": []
                 }
-                    
-                # Tenta salvar
-                print("Salvando dados...", flush=True)
-                result = self.upstash_client.set(key, json.dumps(log_data))
-                print(f"Resultado set: {result}", flush=True)
+            
+            # Adiciona nova tentativa
+            attempt = {
+                "timestamp": datetime.now().isoformat(),
+                "payload": payload,
+                "status": status
+            }
+            
+            if response:
+                attempt["response"] = response
                 
-                # Expira em 2 dias
-                result = self.upstash_client.expire(key, 60 * 60 * 24 * 2)
-                print(f"Resultado expire: {result}", flush=True)
-                
-                print("✅ Log salvo com sucesso!", flush=True)
-                
-            except redis.ConnectionError as e:
-                print(f"❌ Erro de conexão com Upstash: {str(e)}", flush=True)
-                raise
-                
-            except redis.RedisError as e:
-                print(f"❌ Erro do Redis: {str(e)}", flush=True)
-                raise
-                
+            logs["attempts"].append(attempt)
+            logs["updated_at"] = datetime.now().isoformat()
+            logs["total_attempts"] = len(logs["attempts"])
+            
+            # Salva no Upstash
+            self.upstash_client.set(key, json.dumps(logs))
+            # Expira em 2 dias
+            self.upstash_client.expire(key, 60 * 60 * 24 * 2)
+            
+            print(f"📝 Log salvo para usuário {user_id} - Status: {status}", flush=True)
+            
         except Exception as e:
             print(f"❌ Erro ao salvar log no Upstash: {str(e)}", flush=True)
-            print(f"Tipo do erro: {type(e)}", flush=True)
             
     async def send_webhook(self, user_id: str, payload: dict):
         """Envia webhook com retry em caso de erro"""
@@ -214,12 +210,10 @@ class WebhookWorker:
                 delay = self.retry_delays[retry_count]
                 print(f"⚠️ Tentativa {message_data['retry_count']}/{self.max_retries} - Próximo retry em {delay}s", flush=True)
                 
-                # Chave de retry
-                retry_key = f"chat:RETRY:{user_id}"
-                
-                # Salva pra retry
-                self.redis_client.set(retry_key, json.dumps(message_data))
-                self.redis_client.expire(retry_key, delay)
+                # Devolve pra fila
+                self.redis_client.rpush(queue_key, json.dumps(message_data))
+                # Define quando pode tentar de novo
+                self.redis_client.expire(queue_key, delay)
                 
         except Exception as e:
             print(f"❌ Erro ao processar mensagem: {str(e)}", flush=True)
@@ -233,12 +227,10 @@ class WebhookWorker:
                 delay = self.retry_delays[retry_count]
                 print(f"⚠️ Tentativa {message_data['retry_count']}/{self.max_retries} - Próximo retry em {delay}s", flush=True)
                 
-                # Chave de retry
-                retry_key = f"chat:RETRY:{user_id}"
-                
-                # Salva pra retry
-                self.redis_client.set(retry_key, json.dumps(message_data))
-                self.redis_client.expire(retry_key, delay)
+                # Devolve pra fila
+                self.redis_client.rpush(queue_key, json.dumps(message_data))
+                # Define quando pode tentar de novo
+                self.redis_client.expire(queue_key, delay)
             else:
                 print(f"❌ Descartando mensagem após {retry_count + 1} tentativas", flush=True)
                 self.save_webhook_log(
@@ -254,7 +246,7 @@ class WebhookWorker:
             
         finally:
             self.active_slots -= 1
-            self.processing.remove(user_id)
+            self.processing.discard(user_id)
             
     async def run(self):
         """Loop principal do worker"""
@@ -268,33 +260,7 @@ class WebhookWorker:
                     queues = self.redis_client.keys("chat:QUEUE:*")
                     
                     for queue in queues:
-                        user_id = queue.split(':')[2]
-                        retry_key = f"chat:RETRY:{user_id}"
-                        
-                        # Se tem retry pendente
-                        retry_data = self.redis_client.get(retry_key)
-                        if retry_data:
-                            retry_data = json.loads(retry_data)
-                            
-                            # Pega todas mensagens da fila
-                            while True:
-                                message = self.redis_client.lpop(queue)
-                                if not message:
-                                    break
-                                    
-                                try:
-                                    message_data = json.loads(message)
-                                    # Anexa mensagens novas
-                                    retry_data['listamessages'].extend(message_data['listamessages'])
-                                except:
-                                    print(f"❌ Mensagem inválida: {message}", flush=True)
-                            
-                            # Atualiza retry com mensagens novas
-                            self.redis_client.set(retry_key, json.dumps(retry_data))
-                            print(f"📦 Mensagens anexadas ao retry de {user_id}", flush=True)
-                            continue
-                            
-                        # Se não tem retry, processa normalmente
+                        # Pega próxima mensagem
                         message = self.redis_client.lpop(queue)
                         if not message:
                             continue
@@ -311,19 +277,6 @@ class WebhookWorker:
                         # Se lotou os slots, para
                         if self.active_slots >= self.max_slots:
                             break
-                            
-                # Procura retries que já passaram do tempo
-                retries = self.redis_client.keys("chat:RETRY:*")
-                for retry in retries:
-                    # Se ainda existe, já pode tentar de novo
-                    retry_data = self.redis_client.get(retry)
-                    if retry_data:
-                        # Coloca de volta na fila
-                        user_id = retry.split(':')[2]
-                        queue_key = f"chat:QUEUE:{user_id}"
-                        self.redis_client.rpush(queue_key, retry_data)
-                        # Remove retry
-                        self.redis_client.delete(retry)
                             
                 # Pequeno delay antes de checar novamente
                 await asyncio.sleep(0.1)
