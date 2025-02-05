@@ -35,9 +35,6 @@ redis_client = redis.Redis(
 # URL do webhook do .env
 WEBHOOK_URL = os.getenv('WEBHOOK_URL')
 
-# Constantes para retry e Redis
-RETRY_INTERVALS = [30, 180, 300]  # 30s, 3min, 5min
-
 # Cliente Redis do Upstash para logs
 upstash_url = os.getenv('UPSTASH_REDIS_URL')
 if upstash_url:
@@ -89,209 +86,55 @@ def save_error_log(error_type, source, error_message, details=None):
     except Exception as e:
         print(f"[META-ERROR] Erro ao salvar log: {str(e)}", flush=True)
 
-def save_user_message(user_id: str, message: str, metadata: dict = None):
-    """Salva mensagem do usuário no Redis"""
-    try:
-        ttl_key = get_ttl_key(user_id)
-        data_key = get_data_key(user_id)
-        ttl_value = metadata.get('ttl', 300) if metadata else 300
-        
-        if redis_client.exists(data_key):
-            # Recupera dados existentes
-            current_data = json.loads(redis_client.get(data_key))
-            messages = current_data.get("messages", [])
-            messages.append(message)
-            
-            # Nova estrutura com metadados novos e mensagens acumuladas
-            current_data = {
-                "messages": messages,
-                "metadata": metadata,
-                "retry_count": 0
-            }
-        else:
-            # Cria nova estrutura
-            current_data = {
-                "messages": [message],
-                "metadata": metadata,
-                "retry_count": 0
-            }
-        
-        # Salva no Redis
-        redis_client.set(data_key, json.dumps(current_data))
-        redis_client.set(ttl_key, "1")  # Valor dummy
-        redis_client.expire(ttl_key, ttl_value)
-        
-    except Exception as e:
-        error_msg = f"Erro ao salvar mensagem: {str(e)}"
-        print(f"[ERROR] {error_msg}", flush=True)
-        save_error_log("ERROR", "message", error_msg, {
-            "user_id": user_id,
-            "metadata": metadata
-        })
-
-def save_webhook_log(user_id: str, payload: dict, status: str, response: dict = None):
-    """Salva log do webhook no Upstash
-    
-    Args:
-        user_id: ID do usuário
-        payload: Payload enviado
-        status: Status do envio (sending, success, error)
-        response: Resposta do webhook (opcional)
-    """
-    try:
-        # Formato: 04-02-2025-13-21-45-123
-        timestamp = datetime.now().strftime('%d-%m-%Y-%H-%M-%S-%f')[:-3]
-        key = f"webhook:{user_id}:{timestamp}"
-        
-        log_data = {
-            "timestamp": datetime.now().isoformat(),
-            "user_id": user_id,
-            "payload": payload,
-            "status": status
-        }
-        
-        if response:
-            log_data["response"] = response
-            
-        upstash_client.set(key, json.dumps(log_data))
-        # Expira em 30 dias
-        upstash_client.expire(key, 60 * 60 * 24 * 30)
-        
-    except Exception as e:
-        print(f"❌ Erro ao salvar log no Upstash: {str(e)}", flush=True)
-
-async def send_webhook(payload, user_id):
-    """Envia dados para o webhook de forma assíncrona"""
-    # Remove barra final se existir
-    webhook_url = WEBHOOK_URL.rstrip('/')
-    
-    try:
-        print(f"\n=== ENVIANDO WEBHOOK ===", flush=True)
-        print(f"URL: {webhook_url}", flush=True)
-        print(f"Payload: {json.dumps(payload, indent=2)}", flush=True)
-        
-        # Salva log de envio
-        save_webhook_log(user_id, payload, "sending")
-        
-        # Aumentado para 61 segundos para dar margem ao timeout do servidor (60s)
-        timeout = aiohttp.ClientTimeout(total=61)
-        
-        async with aiohttp.ClientSession() as session:
-            print("\nIniciando request...", flush=True)
-            
-            try:
-                async with session.post(
-                    webhook_url,
-                    json=payload,
-                    ssl=False,
-                    timeout=timeout,
-                    headers={
-                        'Content-Type': 'application/json',
-                        'User-Agent': 'Redis-Monitor/1.0'
-                    }
-                ) as response:
-                    status = response.status
-                    text = await response.text()
-                    
-                    print(f"\nResposta do webhook:", flush=True)
-                    print(f"Status: {status}", flush=True)
-                    print(f"Body: {text}", flush=True)
-                    
-                    response_data = {
-                        "status_code": status,
-                        "body": text
-                    }
-                    
-                    if status == 200:
-                        print("\n✅ Webhook enviado com sucesso!", flush=True)
-                        save_webhook_log(user_id, payload, "success", response_data)
-                    else:
-                        print(f"\n❌ Erro na resposta do webhook:", flush=True)
-                        print(f"Status: {status}", flush=True)
-                        print(f"Body: {text}", flush=True)
-                        save_webhook_log(user_id, payload, "error", response_data)
-                    
-                    return status == 200
-            
-            except asyncio.TimeoutError:
-                print(f"\n❌ Timeout ao enviar webhook", flush=True)
-                print(f"O servidor não respondeu em 61 segundos", flush=True)
-                save_webhook_log(user_id, payload, "error", {
-                    "error": "timeout",
-                    "message": "O servidor não respondeu em 61 segundos"
-                })
-                # Força cancelamento da request
-                await session.close()
-                return False
-                
-    except aiohttp.ClientConnectorError as e:
-        error_msg = f"Não conseguiu conectar ao servidor: {str(e)}"
-        print(f"\n❌ {error_msg}", flush=True)
-        save_webhook_log(user_id, payload, "error", {
-            "error": "connection_error",
-            "message": error_msg
-        })
-        return False
-        
-    except Exception as e:
-        error_msg = f"ERRO GRAVE ao enviar webhook: {str(e)}"
-        print(f"\n❌ {error_msg}", flush=True)
-        print(f"Tipo: {type(e)}", flush=True)
-        save_webhook_log(user_id, payload, "error", {
-            "error": "unknown_error",
-            "message": error_msg,
-            "type": str(type(e))
-        })
-        return False
-
-# Controle global de chats em processamento com timestamp
-PROCESSING_CHATS = {}  # user_id -> (timestamp, retry_count)
-
 async def process_expired_chat(ttl_key):
     """Processa chat expirado"""
     try:
         user_id = get_user_id_from_ttl_key(ttl_key)
         data_key = get_data_key(user_id)
-        queue_key = f"chat:QUEUE:{user_id}"
         
-        try:
-            # Recupera dados
-            chat_data = json.loads(redis_client.get(data_key))
-            if not chat_data:
-                save_error_log("WARNING", "process", "Dados não encontrados", {
-                    "ttl_key": ttl_key,
-                    "data_key": data_key
-                })
-                return
-                
-            # Monta payload
-            payload = {
-                **chat_data["metadata"],
-                "listamessages": chat_data["messages"],
-                "processed_at": datetime.now().isoformat()
-            }
+        # Pega dados do chat
+        chat_data = redis_client.get(data_key)
+        if not chat_data:
+            print(f"❌ Dados não encontrados para {user_id}", flush=True)
+            return
             
-            # Adiciona na fila
-            redis_client.rpush(queue_key, json.dumps(payload))
-            print(f"✅ Mensagem adicionada na fila: {queue_key}", flush=True)
-            
-            # Limpa dados originais
-            redis_client.delete(data_key)
-            redis_client.delete(ttl_key)
-                
-        except Exception as e:
-            error_msg = f"Erro ao processar chat: {str(e)}"
-            print(f"❌ {error_msg}", flush=True)
-            save_error_log("ERROR", "process", error_msg, {
-                "user_id": user_id,
-                "ttl_key": ttl_key
-            })
-            
+        chat_data = json.loads(chat_data)
+        
+        # Prepara payload
+        payload = {
+            "user": user_id,
+            "id_agente": chat_data.get("id_agente"),
+            "numero_conectado": chat_data.get("numero_conectado"),
+            "foto": chat_data.get("foto"),
+            "phone": chat_data.get("phone"),
+            "sender_name": chat_data.get("sender_name"),
+            "chave": chat_data.get("chave", ""),
+            "instance_id": chat_data.get("instance_id"),
+            "servidor": chat_data.get("servidor"),
+            "token": chat_data.get("token"),
+            "token_seguranca": chat_data.get("token_seguranca"),
+            "modo": chat_data.get("modo"),
+            "plataforma_ia": chat_data.get("plataforma_ia", 2),
+            "server_url": chat_data.get("server_url", "-"),
+            "provider": chat_data.get("provider", 1),
+            "id_instancia": chat_data.get("id_instancia"),
+            "listamessages": chat_data.get("messages", []),
+            "processed_at": datetime.now().isoformat()
+        }
+        
+        # Adiciona na fila
+        queue_key = f"chat:QUEUE:{user_id}"
+        redis_client.rpush(queue_key, json.dumps(payload))
+        
+        # Limpa dados do chat
+        redis_client.delete(data_key)
+        redis_client.delete(ttl_key)
+        
     except Exception as e:
-        error_msg = f"Erro ao processar chat: {str(e)}"
-        print(f"❌ {error_msg}", flush=True)
-        save_error_log("ERROR", "process", error_msg, {
-            "ttl_key": ttl_key
+        print(f"❌ Erro ao processar chat expirado: {str(e)}", flush=True)
+        save_error_log("process_error", "monitor", str(e), {
+            "ttl_key": ttl_key,
+            "user_id": user_id if 'user_id' in locals() else None
         })
 
 async def monitor():

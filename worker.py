@@ -22,6 +22,8 @@ class WebhookWorker:
         self.max_slots = 15
         self.active_slots = 0
         self.processing = set()
+        self.max_retries = 3
+        self.retry_delays = [30, 180, 300]  # 30s, 3min, 5min
         
         # Carrega configurações
         load_dotenv()
@@ -184,19 +186,71 @@ class WebhookWorker:
             self.active_slots += 1
             self.processing.add(user_id)
             
+            # Pega número de tentativas
+            retry_count = message_data.get('retry_count', 0)
+            
+            # Se passou do limite, descarta
+            if retry_count >= self.max_retries:
+                print(f"❌ Descartando mensagem após {retry_count} tentativas", flush=True)
+                self.save_webhook_log(
+                    user_id=user_id,
+                    payload=message_data,
+                    status="discarded",
+                    response={
+                        "error": f"Máximo de {self.max_retries} tentativas atingido",
+                        "retry_count": retry_count
+                    }
+                )
+                return
+            
             # Tenta enviar
             success = await self.send_webhook(user_id, message_data)
             
             if not success:
-                # Devolve pra fila em caso de erro
-                self.redis_client.rpush(queue_key, json.dumps(message_data))
-                # Marca pra retry em 30s
-                self.redis_client.expire(queue_key, 30)
+                # Incrementa contador
+                message_data['retry_count'] = retry_count + 1
+                
+                # Pega delay baseado na tentativa
+                delay = self.retry_delays[retry_count]
+                print(f"⚠️ Tentativa {message_data['retry_count']}/{self.max_retries} - Próximo retry em {delay}s", flush=True)
+                
+                # Chave de retry
+                retry_key = f"chat:RETRY:{user_id}"
+                
+                # Salva pra retry
+                self.redis_client.set(retry_key, json.dumps(message_data))
+                self.redis_client.expire(retry_key, delay)
                 
         except Exception as e:
             print(f"❌ Erro ao processar mensagem: {str(e)}", flush=True)
-            # Devolve pra fila em caso de erro
-            self.redis_client.rpush(queue_key, json.dumps(message_data))
+            
+            # Incrementa contador
+            retry_count = message_data.get('retry_count', 0)
+            message_data['retry_count'] = retry_count + 1
+            
+            if message_data['retry_count'] < self.max_retries:
+                # Pega delay baseado na tentativa
+                delay = self.retry_delays[retry_count]
+                print(f"⚠️ Tentativa {message_data['retry_count']}/{self.max_retries} - Próximo retry em {delay}s", flush=True)
+                
+                # Chave de retry
+                retry_key = f"chat:RETRY:{user_id}"
+                
+                # Salva pra retry
+                self.redis_client.set(retry_key, json.dumps(message_data))
+                self.redis_client.expire(retry_key, delay)
+            else:
+                print(f"❌ Descartando mensagem após {retry_count + 1} tentativas", flush=True)
+                self.save_webhook_log(
+                    user_id=user_id,
+                    payload=message_data,
+                    status="discarded",
+                    response={
+                        "error": f"Máximo de {self.max_retries} tentativas atingido",
+                        "retry_count": retry_count + 1,
+                        "last_error": str(e)
+                    }
+                )
             
         finally:
             self.active_slots -= 1
@@ -214,14 +268,40 @@ class WebhookWorker:
                     queues = self.redis_client.keys("chat:QUEUE:*")
                     
                     for queue in queues:
-                        # Pega próxima mensagem
+                        user_id = queue.split(':')[2]
+                        retry_key = f"chat:RETRY:{user_id}"
+                        
+                        # Se tem retry pendente
+                        retry_data = self.redis_client.get(retry_key)
+                        if retry_data:
+                            retry_data = json.loads(retry_data)
+                            
+                            # Pega todas mensagens da fila
+                            while True:
+                                message = self.redis_client.lpop(queue)
+                                if not message:
+                                    break
+                                    
+                                try:
+                                    message_data = json.loads(message)
+                                    # Anexa mensagens novas
+                                    retry_data['listamessages'].extend(message_data['listamessages'])
+                                except:
+                                    print(f"❌ Mensagem inválida: {message}", flush=True)
+                            
+                            # Atualiza retry com mensagens novas
+                            self.redis_client.set(retry_key, json.dumps(retry_data))
+                            print(f"📦 Mensagens anexadas ao retry de {user_id}", flush=True)
+                            continue
+                            
+                        # Se não tem retry, processa normalmente
                         message = self.redis_client.lpop(queue)
                         if not message:
                             continue
                             
                         try:
                             message_data = json.loads(message)
-                        except json.JSONDecodeError:
+                        except:
                             print(f"❌ Mensagem inválida: {message}", flush=True)
                             continue
                             
@@ -231,6 +311,19 @@ class WebhookWorker:
                         # Se lotou os slots, para
                         if self.active_slots >= self.max_slots:
                             break
+                            
+                # Procura retries que já passaram do tempo
+                retries = self.redis_client.keys("chat:RETRY:*")
+                for retry in retries:
+                    # Se ainda existe, já pode tentar de novo
+                    retry_data = self.redis_client.get(retry)
+                    if retry_data:
+                        # Coloca de volta na fila
+                        user_id = retry.split(':')[2]
+                        queue_key = f"chat:QUEUE:{user_id}"
+                        self.redis_client.rpush(queue_key, retry_data)
+                        # Remove retry
+                        self.redis_client.delete(retry)
                             
                 # Pequeno delay antes de checar novamente
                 await asyncio.sleep(0.1)
