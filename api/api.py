@@ -19,12 +19,7 @@ app = Flask(__name__)
 app.config['PREFERRED_URL_SCHEME'] = 'https'  # Para HTTPS
 
 # Conexão com Redis
-redis_client = redis.Redis(
-    host=os.getenv('REDIS_HOST', 'localhost'),
-    port=int(os.getenv('REDIS_PORT', 6379)),
-    password=os.getenv('REDIS_PASSWORD'),
-    decode_responses=True
-)
+redis_client = redis.from_url(os.getenv('REDIS_URL'))
 
 @app.route('/message', methods=['POST'])  # Rota principal
 @app.route('/', methods=['POST'])         # Rota alternativa
